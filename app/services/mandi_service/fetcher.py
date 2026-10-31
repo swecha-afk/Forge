@@ -1,8 +1,10 @@
-import os
-import httpx
 import logging
-from typing import Optional, Dict, Any, List
+import os
+from typing import Any
+
+import httpx
 from dotenv import load_dotenv
+
 from app.core.config import settings
 
 # Force reload of .env so Uvicorn workers always pick up your personal key (...732324a3)
@@ -32,9 +34,11 @@ CROP_SYNONYM_MAP = {
     "chili": "Green Chilli",
 }
 
+
 def normalize_commodity(raw_commodity: str) -> str:
     key = raw_commodity.strip().lower()
     return CROP_SYNONYM_MAP.get(key, raw_commodity.strip().title())
+
 
 def format_market_label(raw_market: str, raw_district: str) -> str:
     market_clean = raw_market.strip() if raw_market else "State"
@@ -42,6 +46,7 @@ def format_market_label(raw_market: str, raw_district: str) -> str:
     if "APMC" not in market_clean.upper():
         market_clean = f"{market_clean} APMC"
     return f"{market_clean} ({dist_clean})"
+
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -52,19 +57,25 @@ BROWSER_HEADERS = {
     "Accept": "application/json",
 }
 
-def _select_best_record(records: List[Dict[str, Any]], clean_district: str, clean_state: str) -> Optional[Dict[str, Any]]:
+
+def _select_best_record(
+    records: list[dict[str, Any]], clean_district: str, clean_state: str
+) -> dict[str, Any] | None:
     if not records:
         return None
 
     district_keywords = [
-        w.lower() for w in clean_district.replace("(", " ").replace(")", " ").split()
+        w.lower()
+        for w in clean_district.replace("(", " ").replace(")", " ").split()
         if len(w) > 3 and w.lower() not in {"west", "east", "north", "south"}
     ]
 
     # 1. Match user's district (e.g., "Medinipur" matches "Medinipur(W)")
     for rec in records:
         api_dist = str(rec.get("district", "")).lower()
-        if clean_district.lower() == api_dist or any(kw in api_dist for kw in district_keywords):
+        if clean_district.lower() == api_dist or any(
+            kw in api_dist for kw in district_keywords
+        ):
             return rec
 
     # 2. Match user's state
@@ -76,7 +87,10 @@ def _select_best_record(records: List[Dict[str, Any]], clean_district: str, clea
     # 3. Fallback to first valid live commodity record in the state batch
     return records[0]
 
-async def fetch_live_mandi_data(commodity: str, state: str, district: str) -> Optional[Dict[str, Any]]:
+
+async def fetch_live_mandi_data(
+    commodity: str, state: str, district: str
+) -> dict[str, Any] | None:
     url = f"https://api.data.gov.in/resource/{settings.DATA_GOV_RESOURCE_ID}"
     api_key = os.getenv("DATA_GOV_API_KEY", settings.DATA_GOV_API_KEY).strip()
 
@@ -94,7 +108,7 @@ async def fetch_live_mandi_data(commodity: str, state: str, district: str) -> Op
         "format": "json",
         "filters[state.keyword]": clean_state,
         "filters[commodity]": clean_commodity,
-        "limit": "100"
+        "limit": "100",
     }
 
     try:
@@ -102,24 +116,30 @@ async def fetch_live_mandi_data(commodity: str, state: str, district: str) -> Op
             transport=transport,
             headers=BROWSER_HEADERS,
             timeout=timeout,
-            follow_redirects=True
+            follow_redirects=True,
         ) as client:
             resp = await client.get(url, params=params)
 
             if resp.status_code == 429:
-                logger.warning("OGD API returned 429 Rate Limit. Failing over to SQLite cache.")
+                logger.warning(
+                    "OGD API returned 429 Rate Limit. Failing over to SQLite cache."
+                )
                 return None
 
             resp.raise_for_status()
             payload = resp.json()
 
             if payload.get("status") == "error":
-                logger.warning(f"OGD API validation error: {payload.get('validation_errors')}")
+                logger.warning(
+                    f"OGD API validation error: {payload.get('validation_errors')}"
+                )
                 return None
 
             records = payload.get("records", [])
             if not records:
-                logger.info(f"No live OGD records today for {clean_commodity} in {clean_state}. Using SQLite cache.")
+                logger.info(
+                    f"No live OGD records today for {clean_commodity} in {clean_state}. Using SQLite cache."
+                )
                 return None
 
             target = _select_best_record(records, clean_district, clean_state)
@@ -134,24 +154,24 @@ async def fetch_live_mandi_data(commodity: str, state: str, district: str) -> Op
             best_rec = max(records, key=lambda r: float(r.get("modal_price", 0.0)))
             best_price = float(best_rec.get("modal_price", modal_price))
             best_market = format_market_label(
-                best_rec.get("market", "State"),
-                best_rec.get("district", clean_state)
+                best_rec.get("market", "State"), best_rec.get("district", clean_state)
             )
 
             return {
                 "market": format_market_label(
-                    target.get("market", "State"),
-                    target.get("district", clean_state)
+                    target.get("market", "State"), target.get("district", clean_state)
                 ),
                 "modal_price": modal_price,
                 "arrival_date": target.get("arrival_date", "Today"),
                 "best_state_market": best_market,
-                "best_state_price": best_price
+                "best_state_price": best_price,
             }
 
     except httpx.TimeoutException:
         logger.warning("OGD API timed out. Switching to SQLite cache.")
         return None
     except Exception as e:
-        logger.warning(f"Live OGD API error ({type(e).__name__}: {e}). Switching to SQLite cache.")
+        logger.warning(
+            f"Live OGD API error ({type(e).__name__}: {e}). Switching to SQLite cache."
+        )
         return None

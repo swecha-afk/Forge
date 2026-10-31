@@ -1,8 +1,15 @@
 from typing import Literal
-from app.schemas.mandi_schema import MandiQueryRequest, MandiScheduleResponse
-from app.services.mandi_service.fetcher import fetch_live_mandi_data, normalize_commodity
-from app.services.mandi_service.db_cache import cache_live_price, get_cached_latest_and_avg
+
 from app.core.config import settings
+from app.schemas.mandi_schema import MandiQueryRequest, MandiScheduleResponse
+from app.services.mandi_service.db_cache import (
+    cache_live_price,
+    get_cached_latest_and_avg,
+)
+from app.services.mandi_service.fetcher import (
+    fetch_live_mandi_data,
+    normalize_commodity,
+)
 
 PERISHABILITY_MAP = {
     "tomato": "HIGH",
@@ -19,6 +26,7 @@ PERISHABILITY_MAP = {
     "mustard": "LOW",
 }
 
+
 def get_perishability(commodity: str) -> Literal["HIGH", "MEDIUM", "LOW"]:
     crop_key = commodity.strip().lower()
     for k, tier in PERISHABILITY_MAP.items():
@@ -26,37 +34,46 @@ def get_perishability(commodity: str) -> Literal["HIGH", "MEDIUM", "LOW"]:
             return tier
     return "MEDIUM"
 
+
 async def evaluate_harvest_schedule(req: MandiQueryRequest) -> MandiScheduleResponse:
     # 1. Normalize colloquial crop names ("Aloo" -> "Potato") BEFORE querying API or SQLite
     canonical_crop = normalize_commodity(req.commodity)
-    
+
     live_data = await fetch_live_mandi_data(canonical_crop, req.state, req.district)
-    
+
     if live_data and live_data["modal_price"] > 0:
         cache_live_price(
-            canonical_crop, req.state, req.district,
-            live_data["market"], live_data["modal_price"], live_data["arrival_date"]
+            canonical_crop,
+            req.state,
+            req.district,
+            live_data["market"],
+            live_data["modal_price"],
+            live_data["arrival_date"],
         )
         source = "LIVE_OGD_API"
     else:
         source = "SQLITE_FALLBACK_CACHE"
 
     stats = get_cached_latest_and_avg(canonical_crop, req.district)
-    
+
     if not stats:
         stats = {
             "market": f"{req.district} Central Mandi",
             "modal_price": 2000.0,
             "arrival_date": "Cached Baseline",
-            "seven_day_avg": 1950.0
+            "seven_day_avg": 1950.0,
         }
 
     current_price = stats["modal_price"]
     moving_avg = stats["seven_day_avg"]
     perishability = get_perishability(canonical_crop)
     rain_mm = req.rain_forecast_48h_mm or 0.0
-    
-    trend_delta_pct = round(((current_price - moving_avg) / moving_avg) * 100, 2) if moving_avg > 0 else 0.0
+
+    trend_delta_pct = (
+        round(((current_price - moving_avg) / moving_avg) * 100, 2)
+        if moving_avg > 0
+        else 0.0
+    )
 
     # Multi-variable override: High perishability + heavy rain forecast overrides price hold
     if perishability == "HIGH" and rain_mm >= 15.0:
@@ -103,8 +120,12 @@ async def evaluate_harvest_schedule(req: MandiQueryRequest) -> MandiScheduleResp
         perishability_tier=perishability,
         action_flag=action_flag,
         reasoning_summary=reasoning,
-        best_state_market=live_data.get("best_state_market") if live_data else stats["market"],
-        best_state_price_inr_per_quintal=live_data.get("best_state_price") if live_data else current_price,
+        best_state_market=live_data.get("best_state_market")
+        if live_data
+        else stats["market"],
+        best_state_price_inr_per_quintal=live_data.get("best_state_price")
+        if live_data
+        else current_price,
         data_source=source,
-        arrival_date=stats["arrival_date"]
+        arrival_date=stats["arrival_date"],
     )
