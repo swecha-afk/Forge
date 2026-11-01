@@ -7,7 +7,7 @@ BM25 lexical scoring over official ICAR agronomic guidance documents.
 import json
 import os
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 DEFAULT_DB_PATH = os.path.join("artifacts", "icar_knowledge.db")
@@ -255,7 +255,7 @@ class SQLiteKnowledgeManager:
 
     def cache_set(self, cache_key: str, payload: dict[str, Any]) -> None:
         """Stores or updates API response payload in write-through cache."""
-        now_utc = datetime.now(UTC).isoformat()
+        now_utc = datetime.now(timezone.utc).isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

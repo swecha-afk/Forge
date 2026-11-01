@@ -13,10 +13,17 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Bhashini Voice STT (Member 1 / Node 1)
-      - BHASHINI_USER_ID=${BHASHINI_USER_ID:-}
-      - BHASHINI_API_KEY=${BHASHINI_API_KEY:-}
-      - BHASHINI_PIPELINE_ID=${BHASHINI_PIPELINE_ID:-64392f96daac500b55c543cd}
+      # Groq Whisper STT / English translation
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_STT_MODEL=${GROQ_STT_MODEL:-whisper-large-v3}
+      - GROQ_API_TIMEOUT_SECONDS=${GROQ_API_TIMEOUT_SECONDS:-60}
+      - GROQ_LLM_MODEL=${GROQ_LLM_MODEL:-qwen/qwen3.8-27b}
+      - GROQ_LLM_TIMEOUT_SECONDS=${GROQ_LLM_TIMEOUT_SECONDS:-30}
+      # Sarvam TTS
+      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
+      - SARVAM_TTS_MODEL=${SARVAM_TTS_MODEL:-bulbul:v3}
+      - SARVAM_TTS_SPEAKER=${SARVAM_TTS_SPEAKER:-shubh}
+      - SARVAM_TTS_TIMEOUT_SECONDS=${SARVAM_TTS_TIMEOUT_SECONDS:-60}
       # Agmarknet Mandi API (Member 2)
       - DATA_GOV_API_KEY=${DATA_GOV_API_KEY:-579b464db66ec23bdd000001cdd3946e44ce4afd5208dbe48c4876b4}
       # Database Paths (inside container)
@@ -52,10 +59,15 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - BACKEND_URL=http://backend:8000
-    depends_on:
-      backend:
-        condition: service_healthy
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_STT_MODEL=${GROQ_STT_MODEL:-whisper-large-v3}
+      - GROQ_API_TIMEOUT_SECONDS=${GROQ_API_TIMEOUT_SECONDS:-60}
+      - GROQ_LLM_MODEL=${GROQ_LLM_MODEL:-qwen/qwen3.8-27b}
+      - GROQ_LLM_TIMEOUT_SECONDS=${GROQ_LLM_TIMEOUT_SECONDS:-30}
+      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
+      - SARVAM_TTS_MODEL=${SARVAM_TTS_MODEL:-bulbul:v3}
+      - SARVAM_TTS_SPEAKER=${SARVAM_TTS_SPEAKER:-shubh}
+      - SARVAM_TTS_TIMEOUT_SECONDS=${SARVAM_TTS_TIMEOUT_SECONDS:-60}
     networks:
       - agritech-net
     restart: unless-stopped
@@ -65,4 +77,3 @@ services:
 networks:
   agritech-net:
     driver: bridge
-

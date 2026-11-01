@@ -4,7 +4,7 @@ Chains the ML Predictor (Baseline XGBoost or Calibrated Triad) with Deterministi
 and Cross-Node Meteorological Safety Overrides (Spray Lock & Leaching Gate).
 """
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from app.schemas.swarm_schemas import (
@@ -134,7 +134,7 @@ class UnifiedAgronomicEngine:
 
         # 4. Synthesize Executive Vernacular-Ready Advisory
         advisory_lines = [
-            f"=== ICAR-VERIFIED AGRONOMIC ADVISORY ({telemetry.crop_name.upper()}) ===",
+            f"=== EXPERIMENTAL WEATHER-RISK ASSESSMENT ({telemetry.crop_name.upper()}) ===",
             f"Condition Assessment: {risk_output.predicted_disease.replace('_', ' ').title()}",
             f"Calibrated Outbreak Probability: {risk_output.calibrated_probability * 100:.1f}% ({risk_output.risk_level} RISK)",
             f"Model Engine: {risk_output.model_version}",
@@ -202,5 +202,5 @@ class UnifiedAgronomicEngine:
             rag_guidance=rag_response,
             safety_guardrails=safety_guardrails,
             executive_advisory=executive_advisory,
-            timestamp_utc=datetime.now(UTC).isoformat(),
+            timestamp_utc=datetime.now(timezone.utc).isoformat(),
         )

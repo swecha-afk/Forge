@@ -103,6 +103,36 @@ def test_farmer_problem_1_latent_outbreak_and_treeshap(trained_triad_predictor):
     assert top_driver.effect == "increases_risk"
 
 
+def test_treeshap_attributions_follow_each_crop_weather_input(trained_xgb_predictor):
+    """Different model inputs must produce their own disease-class explanations."""
+    wet_rice_telemetry = WeatherTelemetryInput(
+        crop_name="rice",
+        temp_min_c=12.0,
+        temp_max_c=20.0,
+        humidity_3d_avg=95.0,
+        rain_7d_mm=50.0,
+        soil_moisture=0.35,
+    )
+    hot_dry_wheat_telemetry = WeatherTelemetryInput(
+        crop_name="wheat",
+        temp_min_c=30.0,
+        temp_max_c=40.0,
+        humidity_3d_avg=25.0,
+        rain_7d_mm=0.0,
+        soil_moisture=0.08,
+    )
+
+    wet_rice_risk = trained_xgb_predictor.predict_and_explain(wet_rice_telemetry)
+    hot_dry_wheat_risk = trained_xgb_predictor.predict_and_explain(
+        hot_dry_wheat_telemetry
+    )
+
+    assert wet_rice_telemetry.to_feature_vector() != (
+        hot_dry_wheat_telemetry.to_feature_vector()
+    )
+    assert wet_rice_risk.raw_shap_vector != hot_dry_wheat_risk.raw_shap_vector
+
+
 # ==============================================================================
 # TEST 2: Meteorological Spray-Lock Override (P2)
 # ==============================================================================

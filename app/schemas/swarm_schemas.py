@@ -4,6 +4,8 @@ Enforces immutable runtime contracts between ML Risk Models, RAG retrieval,
 and Agentic LangGraph execution nodes.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 # Locked schema constants
@@ -23,6 +25,10 @@ class WeatherTelemetryInput(BaseModel):
     """Raw meteorological and environmental telemetry from Open-Meteo / IMD sensors."""
 
     crop_name: str = Field(..., description="Crop name (potato, rice, wheat, tomato)")
+    data_source: Literal["LIVE_OPEN_METEO", "SQLITE_FALLBACK_CACHE"] | None = Field(
+        default=None,
+        description="Weather data provenance; None for manually supplied telemetry.",
+    )
     temp_min_c: float = Field(..., description="Minimum night temperature (deg C)")
     temp_max_c: float = Field(..., description="Maximum day temperature (deg C)")
     humidity_3d_avg: float = Field(

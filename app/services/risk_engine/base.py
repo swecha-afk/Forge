@@ -7,11 +7,32 @@ BaseDiseasePredictor and return the immutable StandardizedRiskOutput contract.
 from abc import ABC, abstractmethod
 
 import numpy as np
+import xgboost as xgb
 
 from app.schemas.swarm_schemas import StandardizedRiskOutput, WeatherTelemetryInput
 
 # Global registry for hot-swappable models
 PREDICTOR_REGISTRY: dict[str, type["BaseDiseasePredictor"]] = {}
+
+
+def xgboost_tree_contributions(
+    model: xgb.XGBClassifier, features: np.ndarray, class_idx: int
+) -> tuple[np.ndarray, float]:
+    """Returns native TreeSHAP feature contributions and the base value for one class."""
+    booster = model.get_booster()
+    contributions = booster.predict(
+        xgb.DMatrix(features), pred_contribs=True, strict_shape=True
+    )
+    if contributions.ndim == 3:
+        class_contributions = contributions[0, class_idx]
+    elif contributions.ndim == 2 and contributions.shape[1] == booster.num_features() + 1:
+        class_contributions = contributions[0]
+    else:
+        raise ValueError(
+            f"Unexpected XGBoost contribution shape: {contributions.shape}"
+        )
+
+    return class_contributions[:-1], float(class_contributions[-1])
 
 
 def register_predictor(name: str):

@@ -47,8 +47,8 @@ def generate_shap_figure(
     ]
     values = [d.shap_value for d in sorted_drivers]
     colors = [
-        "#e63946" if v > 0 else "#2a9d8f" for v in values
-    ]  # Red = Risk Elevator, Teal = Risk Mitigator
+        "#b42332" if v > 0 else "#145da0" for v in values
+    ]  # Red = risk elevator, blue = risk mitigator
 
     bars = ax.barh(
         labels, values, color=colors, height=0.55, edgecolor="none", zorder=3

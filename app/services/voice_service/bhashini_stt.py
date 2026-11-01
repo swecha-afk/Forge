@@ -1,29 +1,24 @@
-"""Bhashini Speech-to-Text & Neural Machine Translation Connector with SQLite Failover Cache.
+"""Groq Speech-to-Text connector with SQLite transcript cache.
 
-Interfaces with the Government of India's Digital India Bhashini (MeitY ULCA / Dhruva) API
-to transcribe farmer voice notes in Indic vernaculars (Hindi, Bengali, Telugu, Marathi, etc.)
-and translate them into standardized English for the Agritech Swarm Intelligence Engine.
-Includes an automated write-through SQLite resilience cache to guarantee zero runtime crashes.
+Uses Groq Whisper for Indic transcription and English audio translation.
 """
 
-import json
+import asyncio
 import logging
+import mimetypes
 import os
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import httpx
 
 from app.core.config import settings
-from app.schemas.voice_schemas import (
-    SupportedLanguage,
-    VoiceTranscriptionRequest,
-    VoiceTranscriptionResponse,
-)
+from app.schemas.voice_schemas import VoiceTranscriptionRequest, VoiceTranscriptionResponse
 from app.services.voice_service.audio_utils import compute_audio_hash, decode_base64_audio
 
 logger = logging.getLogger(__name__)
+GROQ_API_BASE_URL = "https://api.groq.com/openai/v1"
 
 # Pre-seeded agronomic vernacular benchmarks for hackathon resilience & demo clips
 PRESEEDED_SCENARIOS: list[dict[str, str]] = [
@@ -78,6 +73,10 @@ PRESEEDED_SCENARIOS: list[dict[str, str]] = [
     },
 ]
 
+
+class VoiceServiceUnavailableError(RuntimeError):
+    """Raised when Groq STT is unavailable and no exact transcript is cached."""
+
 # Vernacular Response Templates for TTS playback in farmer's language
 VERNACULAR_SYNTHESIS_PATTERNS: dict[str, dict[str, str]] = {
     "hi": {
@@ -119,11 +118,11 @@ VERNACULAR_SYNTHESIS_PATTERNS: dict[str, dict[str, str]] = {
 
 
 class BhashiniVoiceService:
-    """Production service for Speech-to-Text & Translation via Bhashini with SQLite failover."""
+    """Groq STT and translation with an exact-audio transcript cache."""
 
     def __init__(self, db_path: str = settings.VOICE_CACHE_DB_PATH):
         self.db_path = db_path
-        self.timeout_sec = settings.API_TIMEOUT_SECONDS
+        self.timeout_sec = settings.GROQ_API_TIMEOUT_SECONDS
         self._init_db()
 
     def _init_db(self) -> None:
@@ -166,7 +165,7 @@ class BhashiniVoiceService:
     def cache_transcription(
         self, audio_hash: str, source_lang: str, vernacular: str, english: str
     ) -> None:
-        """Caches live Bhashini API responses into local SQLite."""
+        """Caches successful STT and translation responses into local SQLite."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(
@@ -197,43 +196,38 @@ class BhashiniVoiceService:
     async def transcribe_and_translate(
         self, req: VoiceTranscriptionRequest
     ) -> VoiceTranscriptionResponse:
-        """Executes Speech-to-Text and English translation via Bhashini API with SQLite failover."""
+        """Transcribes audio with Groq and translates it to English when needed."""
         audio_bytes = decode_base64_audio(req.audio_base64)
         audio_hash = compute_audio_hash(audio_bytes)
+        api_key = os.getenv("GROQ_API_KEY", settings.GROQ_API_KEY).strip()
 
-        # 1. Check if Bhashini Live API keys are available in environment
-        user_id = os.getenv("BHASHINI_USER_ID", settings.BHASHINI_USER_ID).strip()
-        api_key = os.getenv("BHASHINI_API_KEY", settings.BHASHINI_API_KEY).strip()
-
-        if user_id and api_key:
+        if api_key:
             try:
-                live_result = await self._call_bhashini_pipeline(
-                    audio_b64=req.audio_base64,
+                vernacular, english = await self._call_groq_pipeline(
+                    audio_bytes=audio_bytes,
                     source_lang=req.source_language,
                     audio_format=req.audio_format,
-                    sampling_rate=req.sampling_rate,
-                    user_id=user_id,
                     api_key=api_key,
                 )
-                if live_result:
-                    vernacular, english = live_result
-                    self.cache_transcription(
-                        audio_hash, req.source_language, vernacular, english
-                    )
-                    return VoiceTranscriptionResponse(
-                        vernacular_transcript=vernacular,
-                        english_transcript=english,
-                        source_language=req.source_language,
-                        target_language="en",
-                        data_source="BHASHINI_LIVE_API",
-                        confidence_score=0.96,
-                    )
+                self.cache_transcription(
+                    audio_hash, req.source_language, vernacular, english
+                )
+                return VoiceTranscriptionResponse(
+                    vernacular_transcript=vernacular,
+                    english_transcript=english,
+                    source_language=req.source_language,
+                    target_language="en",
+                    data_source="GROQ_LIVE_API",
+                    confidence_score=None,
+                    pipeline_task="groq_whisper_transcription_and_translation",
+                )
             except Exception as e:
                 logger.warning(
-                    f"Bhashini live API call failed ({e}). Engaging SQLite resilience cache."
+                    "Groq transcription/translation failed (%s); checking transcript cache.",
+                    e,
                 )
 
-        # 2. Resilience Failover: Look up cached audio or best matching scenario
+        # A cache hit is valid only for the exact same audio.
         cached = self.get_cached_transcription(audio_hash)
         if cached:
             lang, vern, eng = cached
@@ -243,139 +237,74 @@ class BhashiniVoiceService:
                 source_language=lang,
                 target_language="en",
                 data_source="RESILIENCE_CACHE_FAILOVER",
-                confidence_score=0.98,
+                confidence_score=None,
+                pipeline_task="cached_transcription",
             )
 
-        # 3. Dynamic Acoustic Fallback: Retrieve representative scenario for language
-        fallback = self._get_fallback_for_language(req.source_language)
-        return VoiceTranscriptionResponse(
-            vernacular_transcript=fallback["vernacular"],
-            english_transcript=fallback["english"],
-            source_language=req.source_language,
-            target_language="en",
-            data_source="RESILIENCE_CACHE_FAILOVER",
-            confidence_score=0.92,
+        if not api_key:
+            raise VoiceServiceUnavailableError(
+                "GROQ_API_KEY is not configured and no cached transcript exists for this audio."
+            )
+        raise VoiceServiceUnavailableError(
+            "Groq could not transcribe this audio and no cached transcript exists."
         )
 
-    async def _call_bhashini_pipeline(
+    async def _call_groq_pipeline(
         self,
-        audio_b64: str,
+        audio_bytes: bytes,
         source_lang: str,
         audio_format: str,
-        sampling_rate: int,
-        user_id: str,
         api_key: str,
-    ) -> Optional[Tuple[str, str]]:
-        """Makes live HTTPS calls to Bhashini's ULCA ASR + Translation pipeline."""
-        auth_url = settings.BHASHINI_AUTH_URL
-        headers = {
-            "userID": user_id,
-            "ulcaApiKey": api_key,
-            "Content-Type": "application/json",
-        }
-        config_payload = {
-            "pipelineTasks": [
-                {
-                    "taskType": "asr",
-                    "config": {"language": {"sourceLanguage": source_lang}},
-                },
-                {
-                    "taskType": "translation",
-                    "config": {
-                        "language": {
-                            "sourceLanguage": source_lang,
-                            "targetLanguage": "en",
-                        }
-                    },
-                },
-            ],
-            "pipelineRequestConfig": {"pipelineId": settings.BHASHINI_PIPELINE_ID},
-        }
+    ) -> Tuple[str, str]:
+        """Transcribes the original audio and, when needed, translates it to English."""
+        extension = audio_format.lower().lstrip(".") or "wav"
+        filename = f"recording.{extension}"
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        file_data = (filename, audio_bytes, content_type)
 
         async with httpx.AsyncClient(timeout=self.timeout_sec) as client:
-            # Step A: Query pipeline config
-            resp = await client.post(auth_url, json=config_payload, headers=headers)
-            if resp.status_code != 200:
-                return None
-            pipe_data = resp.json()
-
-            endpoint_info = pipe_data.get("pipelineInferenceAPIEndPoint", {})
-            callback_url = endpoint_info.get(
-                "callbackUrl", settings.BHASHINI_INFERENCE_URL
+            transcription_request = client.post(
+                f"{GROQ_API_BASE_URL}/audio/transcriptions",
+                headers=headers,
+                data={
+                    "model": settings.GROQ_STT_MODEL,
+                    "response_format": "json",
+                    "language": source_lang,
+                    "temperature": "0",
+                },
+                files={"file": file_data},
             )
-            inf_key = endpoint_info.get("inferenceApiKey", {}).get("value", "")
 
-            asr_service_id = ""
-            nmt_service_id = ""
-            for task in pipe_data.get("pipelineResponseConfig", []):
-                t_type = task.get("taskType")
-                configs = task.get("config", [])
-                if configs:
-                    if t_type == "asr":
-                        asr_service_id = configs[0].get("serviceId", "")
-                    elif t_type == "translation":
-                        nmt_service_id = configs[0].get("serviceId", "")
+            if source_lang == "en":
+                transcription_response = await transcription_request
+                transcription_response.raise_for_status()
+                vernacular = transcription_response.json().get("text", "").strip()
+                if not vernacular:
+                    raise ValueError("Groq returned an empty transcription.")
+                return vernacular, vernacular
 
-            # Step B: Perform Compute Inference
-            compute_headers = {
-                "Authorization": inf_key,
-                "Content-Type": "application/json",
-            }
-            compute_payload = {
-                "pipelineTasks": [
-                    {
-                        "taskType": "asr",
-                        "config": {
-                            "language": {"sourceLanguage": source_lang},
-                            "serviceId": asr_service_id,
-                            "audioFormat": audio_format,
-                            "samplingRate": sampling_rate,
-                        },
-                    },
-                    {
-                        "taskType": "translation",
-                        "config": {
-                            "language": {
-                                "sourceLanguage": source_lang,
-                                "targetLanguage": "en",
-                            },
-                            "serviceId": nmt_service_id,
-                        },
-                    },
-                ],
-                "inputData": {"audio": [{"audioContent": audio_b64}]},
-            }
-
-            inf_resp = await client.post(
-                callback_url, json=compute_payload, headers=compute_headers
+            translation_request = client.post(
+                f"{GROQ_API_BASE_URL}/audio/translations",
+                headers=headers,
+                data={
+                    "model": settings.GROQ_STT_MODEL,
+                    "response_format": "json",
+                    "temperature": "0",
+                },
+                files={"file": file_data},
             )
-            if inf_resp.status_code != 200:
-                return None
+            transcription_response, translation_response = await asyncio.gather(
+                transcription_request, translation_request
+            )
+            transcription_response.raise_for_status()
+            translation_response.raise_for_status()
+            vernacular = transcription_response.json().get("text", "").strip()
+            english = translation_response.json().get("text", "").strip()
 
-            res_json = inf_resp.json()
-            pipeline_responses = res_json.get("pipelineResponse", [])
-            vernacular = ""
-            english = ""
-
-            for task_res in pipeline_responses:
-                t_type = task_res.get("taskType")
-                outputs = task_res.get("output", [])
-                if outputs:
-                    if t_type == "asr":
-                        vernacular = outputs[0].get("source", "")
-                    elif t_type == "translation":
-                        english = outputs[0].get("target", "")
-
-            if vernacular and english:
-                return vernacular, english
-            return None
-
-    def _get_fallback_for_language(self, lang: str) -> dict[str, str]:
-        """Returns the most representative agronomic scenario for the given language."""
-        matches = [s for s in PRESEEDED_SCENARIOS if s["source_lang"] == lang]
-        if matches:
-            return matches[0]
-        return PRESEEDED_SCENARIOS[0]
+            if not vernacular or not english:
+                raise ValueError("Groq returned an empty transcription or translation.")
+            return vernacular, english
 
     def synthesize_vernacular_speech_text(
         self,
@@ -393,4 +322,3 @@ class BhashiniVoiceService:
             return template.format(**params)
         except Exception:
             return str(params)
-

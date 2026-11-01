@@ -8,7 +8,6 @@ import os
 
 import joblib
 import numpy as np
-import shap
 import xgboost as xgb
 
 from app.schemas.swarm_schemas import (
@@ -16,7 +15,11 @@ from app.schemas.swarm_schemas import (
     StandardizedRiskOutput,
     WeatherTelemetryInput,
 )
-from app.services.risk_engine.base import BaseDiseasePredictor, register_predictor
+from app.services.risk_engine.base import (
+    BaseDiseasePredictor,
+    register_predictor,
+    xgboost_tree_contributions,
+)
 from app.services.risk_engine.constants import (
     DISEASE_TO_ID,
     FEATURE_ORDER,
@@ -39,11 +42,10 @@ class BaselineXGBPredictor(BaseDiseasePredictor):
         self.max_depth = max_depth
         self.learning_rate = learning_rate
         self.model: xgb.XGBClassifier | None = None
-        self.explainer: shap.TreeExplainer | None = None
         self.classes_: np.ndarray | None = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "BaselineXGBPredictor":
-        """Fits XGBoost classifier and builds the TreeSHAP explainer."""
+        """Fits the XGBoost multiclass classifier."""
         self.classes_ = np.unique(y)
         self.model = xgb.XGBClassifier(
             objective="multi:softprob",
@@ -57,14 +59,13 @@ class BaselineXGBPredictor(BaseDiseasePredictor):
             eval_metric="mlogloss",
         )
         self.model.fit(X, y)
-        self.explainer = shap.TreeExplainer(self.model)
         return self
 
     def predict_and_explain(
         self, telemetry: WeatherTelemetryInput
     ) -> StandardizedRiskOutput:
         """Executes forward inference and extracts exact Shapley values for winning class."""
-        if self.model is None or self.explainer is None:
+        if self.model is None:
             raise RuntimeError(
                 "Model is not fitted. Call fit() or load() before predicting."
             )
@@ -78,21 +79,9 @@ class BaselineXGBPredictor(BaseDiseasePredictor):
         p_k_star = float(probs[k_star])
         disease_name = ID_TO_DISEASE.get(k_star, "unknown")
 
-        # Compute exact TreeSHAP values for input x
-        sv = self.explainer.shap_values(x_2d)
-
-        # Handle TreeExplainer return structure across different formats
-        if isinstance(sv, list):
-            # List of arrays [num_classes], each (num_samples, num_features)
-            raw_shap = sv[k_star][0]
-            base_val = float(self.explainer.expected_value[k_star])
-        elif isinstance(sv, np.ndarray) and len(sv.shape) == 3:
-            # Array of shape (num_samples, num_features, num_classes)
-            raw_shap = sv[0, :, k_star]
-            base_val = float(self.explainer.expected_value[k_star])
-        else:
-            raw_shap = sv[0]
-            base_val = 0.0
+        raw_shap, base_val = xgboost_tree_contributions(
+            self.model, x_2d, k_star
+        )
 
         raw_shap_list = [float(val) for val in raw_shap]
 
@@ -151,5 +140,4 @@ class BaselineXGBPredictor(BaseDiseasePredictor):
         self.model = data["model"]
         self.classes_ = data["classes_"]
         self.version = data.get("version", self.version)
-        self.explainer = shap.TreeExplainer(self.model)
         return self

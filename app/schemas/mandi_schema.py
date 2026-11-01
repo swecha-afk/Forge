@@ -46,5 +46,7 @@ class MandiScheduleResponse(BaseModel):
     reasoning_summary: str
     best_state_market: str | None = None
     best_state_price_inr_per_quintal: float | None = None
-    data_source: Literal["LIVE_OGD_API", "SQLITE_FALLBACK_CACHE"]
+    data_source: Literal[
+        "LIVE_OGD_API", "SQLITE_FALLBACK_CACHE", "DEMO_BASELINE"
+    ]
     arrival_date: str

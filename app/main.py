@@ -3,7 +3,7 @@
 Combines:
 - Member 1: Core Intelligence, Predictive ML, TreeSHAP, and Subspace ICAR RAG
 - Member 2: Agmarknet Mandi Price Harvester and Spoilage Scheduler
-- Member 3 / Member 2: Bhashini Voice STT and LangGraph Architecture Orchestration
+- Member 3 / Member 2: Groq Voice STT, Sarvam TTS, and LangGraph Orchestration
 """
 
 from contextlib import asynccontextmanager

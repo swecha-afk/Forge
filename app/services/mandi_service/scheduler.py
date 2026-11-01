@@ -57,6 +57,7 @@ async def evaluate_harvest_schedule(req: MandiQueryRequest) -> MandiScheduleResp
     stats = get_cached_latest_and_avg(canonical_crop, req.district)
 
     if not stats:
+        source = "DEMO_BASELINE"
         stats = {
             "market": f"{req.district} Central Mandi",
             "modal_price": 2000.0,

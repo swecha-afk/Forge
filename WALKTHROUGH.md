@@ -17,7 +17,7 @@ This document provides a comprehensive technical walkthrough of the **Agritech S
 │ • Calibrated GBDT ML Triad   │ • FastAPI Application Engine │ • Dual-Pane Streamlit UI │
 │ • TreeSHAP Explainability    │ • LangGraph State Machine    │ • Farmer Voice Audio Mic │
 │ • Subspace ICAR RAG & FAISS  │ • Agmarknet Mandi Harvester  │ • Judge Verification Tab │
-│ • Live Weather & Cache Gate  │ • Docker Containerization    │ • Indic TTS / Bhashini   │
+│ • Live Weather & Cache Gate  │ • Docker Containerization    │ • Indic TTS / Sarvam     │
 │ • 5 Safety Overrides & Locks │ • API Resilience Caching     │ • Real-time Charts       │
 └──────────────────────────────┴──────────────────────────────┴──────────────────────────┘
 ```
@@ -175,14 +175,15 @@ Here is what every file in the repository actually does, written in plain and si
 
 ### 5. NEW: Voice STT, LangGraph Orchestration & Streamlit UI (Member 1 Additions)
 
-This section documents the Bhashini Speech-to-Text layer, the 5-node LangGraph orchestrator, the Streamlit dual-pane UI, and Docker containerization — all added in the second build phase.
+This section documents the Groq STT and Sarvam TTS layers, LangGraph orchestration, the Streamlit UIs, and Docker containerization.
 
-#### Node 1: Bhashini Speech-to-Text & Indic Translation
+#### Node 1: Groq Whisper Speech-to-Text & Translation
 
 * **[`app/services/voice_service/bhashini_stt.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/voice_service/bhashini_stt.py):**
-  * *What it does:* The voice input gateway. Accepts base64-encoded audio (WAV/MP3/OGG) in any of 4 Indic languages (Hindi `hi`, Bengali `bn`, Telugu `te`, Marathi `mr`), calls the Government of India's Bhashini ULCA API for ASR + Neural Machine Translation, writes the transcription to a local SQLite resilience cache, and returns the vernacular transcript + English translation. When offline or when Bhashini credentials are absent, automatically falls back to the pre-seeded benchmark scenarios in `data/voice_cache.db`.
+  * *What it does:* Accepts base64 audio, uses Groq Whisper to transcribe the specified supported language, and uses Groq's audio translation endpoint to return English text for non-English audio. Exact-audio transcripts are cached in SQLite; no unrelated demo transcript is substituted when Groq is unavailable.
   * *Key method:* `transcribe_and_translate(req: VoiceTranscriptionRequest) -> VoiceTranscriptionResponse`
-  * *Resilience guarantee:* 7 pre-seeded Indic language scenarios cover all 4 crops and 3 intent types — zero cold-start failures during a pitch.
+  * *Configuration:* Set `GROQ_API_KEY` in `.env` for Whisper STT, intent classification, and grounded response generation. STT uses `GROQ_STT_MODEL` and `GROQ_API_TIMEOUT_SECONDS`; workflow LLM calls use `GROQ_LLM_MODEL` and `GROQ_LLM_TIMEOUT_SECONDS`.
+  * Sarvam handles TTS for the selected response language using `SARVAM_API_KEY`.
 
 * **[`app/services/voice_service/audio_utils.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/voice_service/audio_utils.py):**
   * *What it does:* Audio pre-processing helpers — SHA-256 hash for cache keying, base64 decode, audio file encoding.
@@ -190,7 +191,7 @@ This section documents the Bhashini Speech-to-Text layer, the 5-node LangGraph o
 * **[`app/schemas/voice_schemas.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/schemas/voice_schemas.py):**
   * *What it does:* Pydantic v2 contracts for voice I/O: `VoiceTranscriptionRequest`, `VoiceTranscriptionResponse`, `AgentVoiceQueryRequest`, `AgentVoiceQueryResponse`, and `SupportedLanguage` enum.
 
-#### LangGraph 5-Node Deterministic Swarm Orchestrator
+#### LangGraph Deterministic Swarm Orchestrator
 
 ```
 [AUDIO/TEXT INPUT]
@@ -198,8 +199,8 @@ This section documents the Bhashini Speech-to-Text layer, the 5-node LangGraph o
      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ NODE 1: STT (stt_node)                                                      │
-│  Bhashini ASR+NMT → vernacular_transcript + english_transcript              │
-│  Failover: SQLite voice_cache.db pre-seeded scenarios                       │
+│  Groq Whisper → vernacular_transcript + English audio translation           │
+│  Failover: exact-audio SQLite transcript cache                              │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -229,34 +230,46 @@ This section documents the Bhashini Speech-to-Text layer, the 5-node LangGraph o
 │ NODE 5: SYNTHESIZER (synthesizer_node)                                     │
 │  Formulates vernacular TTS speech text in farmer's native language         │
 │  Templates: spray_lock / irrigation_lock / disease_advice / mandi_harvest  │
-│  Output: final_speech_text (ready for Bhashini TTS / st.audio playback)   │
+│  Output: final_speech_text                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ NODE 6: TTS OUTPUT (tts_output_node)                                       │
+│  Calls Sarvam TTS in the selected language; exposes base64 WAV audio        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 * **[`app/services/langgraph_agent/state.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/langgraph_agent/state.py):**
-  * *What it does:* Defines `AgritechAgentState` TypedDict — the shared message bus between all 5 nodes.
+  * *What it does:* Defines `AgritechAgentState` TypedDict — the shared message bus between workflow nodes, including TTS status and audio output.
 
 * **[`app/services/langgraph_agent/nodes.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/langgraph_agent/nodes.py):**
-  * *What it does:* Implements all 5 node functions: `stt_node`, `router_node`, `tool_execution_node`, `guardrail_verification_node`, `synthesizer_node`.
+  * *What it does:* Implements STT, routing, tool execution, guardrail verification, response synthesis, and the final Sarvam TTS node.
 
 * **[`app/services/langgraph_agent/workflow.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/langgraph_agent/workflow.py):**
-  * *What it does:* Compiles the `StateGraph`, wires all 5 edges, and provides `run_agritech_agent_workflow()` — the single entry-point for both the FastAPI endpoint and Streamlit UI.
+  * *What it does:* Compiles the `StateGraph`, wires the workflow through TTS, and provides `run_agritech_agent_workflow()`.
 
 #### New API Endpoints
 
 | Endpoint | Method | Description |
 |:---------|:------:|:------------|
-| `/api/v1/agent/voice/transcribe` | POST | Bhashini STT: converts base64 audio → vernacular + English transcript |
-| `/api/v1/agent/orchestrate` | POST | Full 5-Node LangGraph execution: voice/text → deterministic advisory |
+| `/api/v1/agent/voice/transcribe` | POST | Groq Whisper STT: base64 audio → vernacular + English transcript |
+| `/api/v1/agent/orchestrate` | POST | Full LangGraph execution including final TTS output |
 | `/api/v1/agent/languages` | GET | Lists supported Indic languages and BCP-47 codes |
 
 #### Streamlit Dual-Pane UI
 
 * **[`app/frontend/ui.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/frontend/ui.py):**
   * *What it does:* The complete dual-pane farmer interface.
-    * **Left Pane (Farmer Experience):** Language selector, district/state inputs, vernacular text query, voice note uploader, submit button, 5 quick-demo scenario buttons, live advisory output with guardrail badges.
-    * **Right Pane (Judge Verification Console):** Interactive TreeSHAP waterfall chart (`generate_shap_figure()`), ICAR citation cards with clickable government bulletin URLs, Agmarknet mandi price metrics, live weather telemetry JSON, complete agent state JSON (zero-dummy-data proof), and 5-fold benchmark table.
+    * **Left Pane (Farmer Experience):** Language selector, district/state inputs, vernacular text query, hold-to-speak microphone recording, voice note uploader, submit button, 5 quick-demo scenario buttons, live advisory output with guardrail badges.
+    * **Right Pane (Judge Verification Console):** Interactive SHAP chart and per-feature contribution table, ICAR citation cards with clickable government bulletin URLs, Agmarknet mandi price metrics, live weather telemetry JSON, complete agent state JSON, and 5-fold benchmark table.
   * *How to run:* `streamlit run app/frontend/ui.py` (from project root)
+  * Browser microphone access requires `localhost` or an HTTPS connection. Add `GROQ_API_KEY` to `.env` for voice transcription and `SARVAM_API_KEY` for speech output.
+
+#### Minimal Workflow Test UI
+
+* **[`app/frontend/minimal_ui.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/frontend/minimal_ui.py):** Small API-backed client for text/audio queries, advisory output, TTS playback, and workflow details.
+* Run the backend with `uvicorn app.main:app --reload`, then run `streamlit run app/frontend/minimal_ui.py`. Set `BACKEND_URL` if the API is not at `http://localhost:8000`.
+* Docker Compose serves the complete dual-pane UI at `http://localhost:8501` when started with `--profile frontend`.
 
 #### Docker Containerization
 
@@ -274,9 +287,9 @@ docker compose --profile frontend up
 
 #### Voice Cache & Demo Data
 
-* **`data/voice_cache.db`:** SQLite resilience cache for Bhashini transcriptions. Pre-seeded with 7 benchmark scenarios across Hindi, Bengali, Telugu, Marathi for all 4 crops and 3 intent types. Zero cold-start failures guaranteed.
-* **Demo benchmark:** `python benchmarks/run_voice_orchestration_demo.py` — runs all 5 voice/orchestration tests and exits with code 0.
-* **Pytest suite:** `python -m pytest benchmarks/test_voice_and_orchestration.py -v` — 6 async tests.
+* **`data/voice_cache.db`:** SQLite cache for exact audio transcription results from Groq Whisper.
+* **Demo benchmark:** `python benchmarks/run_voice_orchestration_demo.py` runs the cache and text-workflow demonstrations. Set `GROQ_STT_DEMO_AUDIO` to a real recording path and `GROQ_STT_DEMO_LANGUAGE` (for example `hi`) to also test live voice transcription and voice orchestration.
+* **Pytest suite:** `python -m pytest benchmarks/test_voice_and_orchestration.py -v` — voice, workflow, and TTS tests.
 
 ---
 
@@ -310,7 +323,7 @@ Now that the **Core Intelligence Engine (Member 1)** is 100% completed, verified
 │ STEP 1 (Member 2): Pull repo & verify local health                                      │
 │ STEP 2 (Member 2): Connect LangGraph agent router node to Advisory & Mandi tools        │
 │ STEP 3 (Member 2): Write Dockerfile & docker-compose.yml for backend                    │
-│ STEP 4 (Member 3): Build Streamlit Left Pane (Audio Mic + Bhashini STT/TTS)             │
+│ STEP 4 (Member 3): Build Streamlit Left Pane (Groq STT + Sarvam TTS)                   │
 │ STEP 5 (Member 3): Build Streamlit Right Pane (TreeSHAP chart + ICAR cards + 5 buttons) │
 │ STEP 6 (Joint Team): 30-Minute Dry Run using benchmarks/demo_scenarios.py               │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
@@ -401,7 +414,7 @@ col_farmer, col_judge = st.columns([1, 1.2])  # Left: Farmer, Right: Judge Conso
 ##### Task 3.2: Build Left Pane (Farmer Experience)
 * Add a microphone button using `streamlit-mic-recorder` (or audio file uploader).
 * Add a language selector: `Hindi`, `Bengali`, `Malayalam`, `English`.
-* Connect speech-to-text (using **Bhashini API** or **Whisper** or fallback audio).
+* Connect speech-to-text with **Groq Whisper** and speech output with **Sarvam TTS**.
 * Display the simplified farmer advisory text in large, accessible fonts.
 * Play audio response back via an audio player (`st.audio`).
 

@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Arial, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        color: #17324d;
+        background: transparent;
+      }
+
+      .recorder {
+        display: grid;
+        justify-items: center;
+        gap: 8px;
+        padding: 5px 0;
+      }
+
+      button {
+        width: min(100%, 300px);
+        min-height: 58px;
+        border: 2px solid #a92332;
+        border-radius: 8px;
+        color: #fff;
+        background: #b42332;
+        font-size: 17px;
+        font-weight: 700;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      button:focus-visible {
+        outline: 3px solid #175ea8;
+        outline-offset: 3px;
+      }
+
+      button.recording {
+        border-color: #7f1723;
+        background: #861b27;
+      }
+
+      #status {
+        min-height: 18px;
+        color: #40566c;
+        font-size: 13px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="recorder">
+      <button id="toggle-button" type="button" aria-pressed="false">
+        Start speaking
+      </button>
+      <div id="status" role="status" aria-live="polite">
+        Tap once to start speaking; tap again when finished.
+      </div>
+    </div>
+    <script>
+      const button = document.getElementById("toggle-button");
+      const status = document.getElementById("status");
+      let isRecording = false;
+      let mediaRecorder = null;
+      let mediaStream = null;
+      let audioChunks = [];
+      let recognition = null;
+      let recognitionAvailable = false;
+      let recognitionFailed = false;
+      let recognitionEnded = true;
+      let audioDataUrl = null;
+      let recognizedText = "";
+      let recognitionBaseText = "";
+      let recognitionLanguage = "hi-IN";
+
+      function sendMessage(type, data) {
+        window.parent.postMessage(
+          Object.assign({ isStreamlitMessage: true, type }, data),
+          "*"
+        );
+      }
+
+      function setFrameHeight() {
+        sendMessage("streamlit:setFrameHeight", { height: 98 });
+      }
+
+      function setRecordingState(recording) {
+        button.classList.toggle("recording", recording);
+        button.setAttribute("aria-pressed", String(recording));
+        button.textContent = recording ? "Stop speaking" : "Start speaking";
+      }
+
+      function sendTranscriptUpdate(state) {
+        sendMessage("streamlit:setComponentValue", {
+          value: {
+            transcript: recognizedText,
+            recording: isRecording,
+            status: state,
+          },
+          dataType: "json",
+        });
+      }
+
+      function getSpeechRecognitionConstructor() {
+        return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+      }
+
+      function startSpeechRecognition() {
+        const SpeechRecognition = getSpeechRecognitionConstructor();
+        recognitionAvailable = Boolean(SpeechRecognition);
+        recognitionFailed = false;
+        recognitionEnded = !recognitionAvailable;
+        if (!recognitionAvailable) {
+          status.textContent =
+            "Recording… live transcription is unavailable in this browser; audio will still be transcribed on submit.";
+          return;
+        }
+
+        recognition = new SpeechRecognition();
+        recognition.lang = recognitionLanguage;
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.onresult = (event) => {
+          const finalParts = [];
+          const interimParts = [];
+          for (let index = 0; index < event.results.length; index += 1) {
+            const result = event.results[index];
+            const transcript = result[0] && result[0].transcript;
+            if (!transcript) continue;
+            (result.isFinal ? finalParts : interimParts).push(transcript.trim());
+          }
+          const currentText = [...finalParts, ...interimParts]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+          recognizedText = [recognitionBaseText, currentText]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+          sendTranscriptUpdate("recording");
+        };
+        recognition.onerror = (event) => {
+          recognitionEnded = true;
+          if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            recognitionFailed = true;
+            status.textContent =
+              "Live transcription permission was denied. The audio recording can still be submitted.";
+          } else if (event.error !== "no-speech" && event.error !== "aborted") {
+            recognitionFailed = true;
+            status.textContent =
+              "Live transcription is unavailable; the audio recording can still be submitted.";
+          }
+          maybeFinishRecording();
+        };
+        recognition.onend = () => {
+          if (isRecording && !recognitionFailed) {
+            recognitionBaseText = recognizedText;
+            try {
+              recognition.start();
+              return;
+            } catch (_error) {
+              recognitionFailed = true;
+              recognitionAvailable = false;
+              status.textContent =
+                "Live transcription stopped; the audio recording can still be submitted.";
+            }
+          }
+          recognitionEnded = true;
+          maybeFinishRecording();
+        };
+        try {
+          recognition.start();
+          status.textContent = "Recording… your words will appear in the query box.";
+        } catch (_error) {
+          recognitionFailed = true;
+          recognitionAvailable = false;
+          recognitionEnded = true;
+          status.textContent =
+            "Live transcription could not start; the audio recording can still be submitted.";
+        }
+      }
+
+      function stopTracks() {
+        if (mediaStream) {
+          mediaStream.getTracks().forEach((track) => track.stop());
+          mediaStream = null;
+        }
+      }
+
+      function maybeFinishRecording() {
+        if (isRecording || !audioDataUrl || !recognitionEnded) return;
+        const audioBase64 = audioDataUrl.split(",", 2)[1];
+        if (!audioBase64) {
+          status.textContent = "Could not read the recording. Please try again.";
+          return;
+        }
+        const mime = mediaRecorder.mimeType.split(";", 1)[0].toLowerCase();
+        const extension = mime.includes("mp4") ? "mp4" : "webm";
+        sendMessage("streamlit:setComponentValue", {
+          value: {
+            audio_base64: audioBase64,
+            audio_format: extension,
+            transcript: recognizedText,
+            recording: false,
+            status: "ready",
+          },
+          dataType: "json",
+        });
+        audioDataUrl = null;
+        status.textContent = "Recording ready. Submit to get your advisory.";
+        setFrameHeight();
+      }
+
+      function finishRecording() {
+        if (!isRecording) return;
+        isRecording = false;
+        setRecordingState(false);
+        status.textContent = "Finishing recording…";
+        if (recognitionAvailable && recognition) {
+          try {
+            recognition.stop();
+          } catch (_error) {
+            recognitionEnded = true;
+          }
+        } else {
+          recognitionEnded = true;
+        }
+        if (mediaRecorder && mediaRecorder.state === "recording") {
+          mediaRecorder.stop();
+        }
+        maybeFinishRecording();
+      }
+
+      async function startRecording() {
+        if (isRecording) return;
+        isRecording = true;
+        recognizedText = "";
+        recognitionBaseText = "";
+        audioDataUrl = null;
+        recognitionEnded = false;
+        setRecordingState(true);
+        status.textContent = "Requesting microphone access…";
+        sendTranscriptUpdate("recording");
+
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          if (!isRecording) {
+            stopTracks();
+            setRecordingState(false);
+            return;
+          }
+
+          const preferredTypes = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/mp4",
+          ];
+          const mimeType = preferredTypes.find((type) =>
+            MediaRecorder.isTypeSupported(type)
+          );
+          mediaRecorder = mimeType
+            ? new MediaRecorder(mediaStream, { mimeType })
+            : new MediaRecorder(mediaStream);
+          audioChunks = [];
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) audioChunks.push(event.data);
+          };
+          mediaRecorder.onerror = () => {
+            status.textContent = "Recording failed. Please try again.";
+            isRecording = false;
+            recognitionEnded = true;
+            setRecordingState(false);
+            stopTracks();
+          };
+          mediaRecorder.onstop = () => {
+            const blob = new Blob(audioChunks, {
+              type: mediaRecorder.mimeType || "audio/webm",
+            });
+            if (blob.size === 0) {
+              status.textContent = "No audio captured. Please try again.";
+              stopTracks();
+              return;
+            }
+
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              audioDataUrl = String(reader.result || "");
+              stopTracks();
+              maybeFinishRecording();
+            };
+            reader.onerror = () => {
+              status.textContent = "Could not read the recording. Please try again.";
+              stopTracks();
+            };
+            reader.readAsDataURL(blob);
+          };
+
+          mediaRecorder.start();
+          startSpeechRecognition();
+        } catch (error) {
+          isRecording = false;
+          recognitionEnded = true;
+          setRecordingState(false);
+          stopTracks();
+          status.textContent =
+            error && error.name === "NotAllowedError"
+              ? "Microphone access was denied. Allow microphone access and try again."
+              : "Could not start the microphone. Check browser permissions and try again.";
+          sendTranscriptUpdate("error");
+        }
+      }
+
+      function toggleRecording() {
+        if (isRecording) {
+          finishRecording();
+        } else {
+          startRecording();
+        }
+      }
+
+      button.addEventListener("click", toggleRecording);
+      button.addEventListener("keydown", (event) => {
+        if (event.code === "Space" || event.code === "Enter") {
+          event.preventDefault();
+        }
+      });
+      window.addEventListener("blur", () => {
+        if (isRecording) finishRecording();
+      });
+
+      window.addEventListener("message", (event) => {
+        if (!event.data || event.data.type !== "streamlit:render") return;
+        const args = event.data.args || {};
+        if (args.language) recognitionLanguage = args.language;
+        setFrameHeight();
+      });
+      sendMessage("streamlit:componentReady", { apiVersion: 1 });
+      setFrameHeight();
+    </script>
+  </body>
+</html>

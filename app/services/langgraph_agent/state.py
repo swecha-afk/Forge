@@ -13,6 +13,9 @@ class AgritechAgentState(TypedDict, total=False):
     farmer_vernacular_transcript: str
     english_transcript: str
     data_source_voice: str
+    intent_classification_source: str
+    farmer_response_source: str
+    llm_error: str | None
 
     # 2. Extracted Entities & Routing
     detected_crop: str  # potato, tomato, rice, wheat
@@ -20,12 +23,21 @@ class AgritechAgentState(TypedDict, total=False):
     state: str
     latitude: float
     longitude: float
-    intent: Literal["disease_outbreak", "harvest_scheduling", "irrigation_check", "general"]
+    intent: Literal[
+        "disease_outbreak",
+        "harvest_scheduling",
+        "irrigation_check",
+        "crop_insurance",
+        "general",
+    ]
 
     # 3. Tool Execution & Swarm Results
     weather_telemetry: dict[str, Any] | None
+    weather_data_source: str
     engine_result: dict[str, Any] | None
     mandi_result: dict[str, Any] | None
+    insurance_guidance: dict[str, Any] | None
+    general_query_context: dict[str, Any] | None
     execution_route: str
 
     # 4. Deterministic Guardrails Check
@@ -39,3 +51,8 @@ class AgritechAgentState(TypedDict, total=False):
     vernacular_response_text: str
     final_speech_text: str
 
+    # 6. TTS Audio Output
+    tts_audio_base64: str | None
+    tts_status: str  # "TTS_LIVE", "TTS_UNAVAILABLE", "TEXT_ONLY"
+    tts_mime_type: str
+    tts_error: str | None

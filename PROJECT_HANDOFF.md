@@ -4,7 +4,7 @@ This document explains the new components that are currently untracked, their re
 
 ## 1. Current Project State
 
-The repository has a working multi-component backend and frontend structure. Most completed systems are connected through FastAPI and a LangGraph-style five-node workflow.
+The repository has a working multi-component backend and frontend structure. Most completed systems are connected through FastAPI and a LangGraph workflow ending in TTS output.
 
 The current state is:
 
@@ -38,7 +38,7 @@ This handoff identifies work for the next member but does not imply that every r
 
 The following features are incomplete or not fully demonstrated:
 
-- Actual spoken TTS audio output
+- Live Sarvam TTS audio with real credentials
 - Complete failure handling with no cached weather
 - Real end-to-end Docker verification
 - Full automated test execution
@@ -58,22 +58,23 @@ Files:
 Purpose:
 
 - Moves the application from separate API calls into one state-based workflow.
-- Defines and executes the five-node orchestration pipeline.
+- Defines the STT, routing, tool, guardrail, synthesis, and TTS pipeline.
 - Keeps routing, tool results, safety flags, and final response text in one typed state object.
 
 Node flow:
 
 1. `stt_node`
    - Accepts base64 voice audio.
-   - Calls the Bhashini voice service when audio is present.
+   - Calls Groq Whisper when audio is present.
    - Otherwise passes text directly into the workflow.
 
 2. `router_node`
-   - Detects crop from known keywords.
-   - Selects one of the intents: disease, harvest/mandi, irrigation, or general.
+   - Uses Groq chat completions to classify crop and intent, including PMFBY/crop-insurance queries, from the query and its English translation.
+   - Falls back to deterministic multilingual keyword routing if Groq is unavailable or returns invalid output.
    - Resolves district latitude and longitude from a registry.
 
 3. `tool_execution_node`
+   - Routes crop-insurance and general questions away from the crop/weather risk engine.
    - Sends mandi/harvest queries to the mandi advisor.
    - Sends disease and irrigation queries to the unified ML/RAG engine.
    - Loads the calibrated triad model and falls back to the baseline XGBoost model.
@@ -83,8 +84,13 @@ Node flow:
    - Converts engine flags into visible state properties.
 
 5. `synthesizer_node`
-   - Builds English advisory text.
-   - Builds templated vernacular text for the selected language.
+   - Generates a concise response in the selected language from workflow evidence and ICAR citations.
+   - Applies spray, irrigation, ICAR-confidence, and harvest safety templates only to the matching intent, so unrelated weather guardrails do not replace the answer.
+   - Does not state PMFBY deadlines or required documents as verified without a current official notification.
+
+6. `tts_output_node`
+   - Calls Sarvam TTS in the selected response language and returns base64 WAV audio.
+   - Preserves the vernacular text and reports the failure reason when TTS is unavailable.
 
 Main entry function:
 
@@ -96,10 +102,11 @@ The implementation is located in `app/services/langgraph_agent/workflow.py`.
 
 Existing limitation:
 
-- Routing is currently keyword-based. It is deterministic and suitable as a fallback, but it is not an LLM intent planner.
+- Groq intent classification and response generation require `GROQ_API_KEY`; configure `GROQ_LLM_MODEL` and `GROQ_LLM_TIMEOUT_SECONDS` as needed.
+- The UI/API report whether Groq or a deterministic fallback produced the classification and response.
 - The workflow is a sequential LangGraph state graph. Parallel tool execution has not been implemented.
 
-### 3.2 Voice STT, Translation, and Cache
+### 3.2 Groq Voice STT, Translation, and Cache
 
 Files:
 
@@ -111,12 +118,12 @@ Purpose:
 
 - Decodes base64 audio.
 - Computes an audio SHA-256 hash.
-- Calls Bhashini for Indic ASR and English translation.
+- Calls Groq Whisper for Indic ASR and Groq audio translation for English.
 - Stores successful results in SQLite.
-- Falls back to cached or pre-seeded transcript scenarios.
+- Falls back only to a transcript cached for the exact same recording; unavailable transcription is surfaced as an error instead of returning unrelated demo text.
 - Builds vernacular response text for the output layer.
 
-The main class is `BhashiniVoiceService`.
+The existing service class is `BhashiniVoiceService` (a legacy name); it now handles Groq STT and transcript caching. Sarvam TTS is implemented separately.
 
 Supported language codes include:
 
@@ -132,10 +139,10 @@ Supported language codes include:
 
 Important limitations:
 
-- There is no actual Bhashini TTS call.
-- `synthesize_vernacular_speech_text()` creates text only; it does not generate an audio file or base64 audio response.
-- Unknown cached audio can fall back to a representative pre-seeded scenario. This is useful for demo resilience but should be clearly identified as fallback data.
-- The selected audio format is not propagated correctly in one workflow path: orchestration currently initializes `audio_format` as `"wav"` regardless of the uploaded file. Update this in `workflow.py`, the workflow node, and the frontend upload flow.
+- The final workflow node now calls Sarvam TTS and returns base64 WAV audio when available; validate live playback with a configured `SARVAM_API_KEY`.
+- Groq Whisper handles STT and English audio translation; Sarvam handles TTS for the selected response language.
+- Configure `GROQ_API_KEY` in `.env`; the default STT model is `whisper-large-v3`.
+- Audio format is carried from the upload through the API and workflow to STT.
 
 ### 3.3 Voice API Schemas
 
@@ -166,30 +173,30 @@ The orchestration router currently catches workflow exceptions and returns HTTP 
 - RAG unavailable or low confidence.
 - Audio decode failure.
 - Model artifact unavailable.
-- Bhashini live/API failure.
+- Sarvam TTS API failure.
 
 ### 3.4 Streamlit Frontend
 
 File:
 
 - `app/frontend/ui.py`
+- `app/frontend/minimal_ui.py`
 
 Purpose:
 
 - Provides the farmer-facing left pane.
 - Provides the judge verification console on the right.
 - Accepts text and uploaded voice recordings.
+- Captures microphone audio with a press-and-hold control for Groq Whisper transcription.
 - Displays preloaded demo scenarios.
 - Displays vernacular advisory text.
-- Displays SHAP results, ICAR citations, mandi data, guardrail flags, weather JSON, and benchmark evidence.
+- Displays SHAP charts and a per-feature contribution table, ICAR citations, mandi data, guardrail flags, weather JSON, and benchmark evidence.
 
-The frontend currently calls the workflow directly as a Python module instead of using FastAPI over HTTP. This is acceptable for the single-container demo, but a final architecture should call `/api/v1/agent/orchestrate` through the backend service when frontend/backend separation is required.
+The existing judge console calls the workflow directly. The minimal test UI calls `/api/v1/agent/orchestrate` over HTTP and includes a TTS audio player.
 
 Remaining frontend work:
 
-- Add a visible speaker/audio playback component after real TTS is implemented.
 - Show whether data came from live APIs, SQLite cache, or fallback/demo data.
-- Preserve original audio format instead of always sending WAV metadata.
 - Improve validation for uploaded audio size and duration.
 - Add an explicit unavailable-data state instead of only a generic engine error.
 - Add a loading state for each external API or cache operation.
@@ -208,7 +215,7 @@ Purpose:
 - Containerizes the FastAPI backend.
 - Containerizes the Streamlit frontend.
 - Shares artifact and data directories as volumes.
-- Adds backend health checking and service dependency ordering.
+- Adds backend health checking; the full Streamlit UI runs the workflow directly.
 
 The backend Dockerfile separately installs FAISS and SentenceTransformers because they are commented out in `requirements.txt`.
 
@@ -242,8 +249,8 @@ Purpose:
 
 The test suite includes:
 
-- Hindi STT fallback/live behavior.
-- Bengali STT fallback/live behavior.
+- Groq Hindi and Bengali STT/translation behavior.
+- Explicit error response when Groq is unconfigured and an exact-audio cache miss occurs.
 - Voice cache write/retrieval round trips.
 - Hindi disease outbreak orchestration.
 - Bengali mandi/harvest orchestration.
@@ -255,13 +262,14 @@ Generated `artifacts/.mplcache/` contents should not normally be committed. It i
 
 `.env.example` documents environment variables for:
 
-- Bhashini user ID, API key, and pipeline ID.
+- Groq API key, model, and API timeout for STT.
+- Sarvam API key, model, speaker, and request timeout for TTS.
 - Data.gov.in API key.
 - SQLite database locations.
 - Safety thresholds.
 - API timeout.
 
-Do not use production credentials in committed source. The Bhashini credentials should remain empty in the example.
+Do not use production credentials in committed source. Keep Groq and Sarvam credentials empty in the example.
 
 Verify that every setting named in `.env.example` is also read consistently by `app/core/config.py`.
 
@@ -287,18 +295,9 @@ The modified RAG and weather files are tightly connected to the fallback guarant
 
 ### P0: Required Before the Final Demo
 
-#### 5.1 Implement Real TTS
+#### 5.1 Verify Live TTS Output
 
-Add a Bhashini TTS method and expose the result through the workflow and API.
-
-Recommended implementation steps:
-
-1. Add a TTS pipeline call in `app/services/voice_service/bhashini_stt.py`.
-2. Return audio bytes or base64 audio in the service response.
-3. Add `audio_base64`, MIME type, or audio URL fields to a response schema if needed.
-4. Add a Streamlit audio player for the vernacular response.
-5. Preserve normal text fallback when TTS credentials or network calls fail.
-6. Mark whether output came from live TTS or text-only fallback.
+The final workflow node and API fields now call Sarvam TTS and return audio when successful. Validate the live response with `SARVAM_API_KEY`; otherwise the workflow returns the vernacular text with a `TTS_UNAVAILABLE` status and an error reason.
 
 Files likely to change:
 
@@ -309,21 +308,9 @@ Files likely to change:
 - `app/routers/voice_agent_router.py`
 - `app/frontend/ui.py`
 
-#### 5.2 Fix Audio Format Propagation
+#### 5.2 Verify Audio Format Propagation
 
-The orchestration helper should accept the uploaded audio format.
-
-Current issue:
-
-- `run_agritech_agent_workflow()` initializes the workflow state with `"wav"` as the default audio format.
-- Uploaded MP3, OGG, FLAC, and M4A data may still be processed with incorrect metadata.
-
-Required change:
-
-- Infer or receive the format in Streamlit.
-- Pass it through `AgentVoiceQueryRequest`.
-- Pass it through `run_agritech_agent_workflow()`.
-- Pass it to `VoiceTranscriptionRequest`.
+The minimal UI sends the uploaded file extension through `AgentVoiceQueryRequest`, the workflow helper, and `VoiceTranscriptionRequest`. Verify with supported audio formats during integration testing.
 
 #### 5.3 Complete Failure Handling
 
@@ -343,7 +330,7 @@ Also verify fallback behavior for:
 - FAISS unavailable.
 - SentenceTransformers unavailable.
 - SQLite database unavailable.
-- Bhashini unavailable.
+- Sarvam TTS unavailable.
 - Mandi API unavailable.
 - Malformed base64 audio.
 
@@ -385,13 +372,13 @@ For all optional Docker dependencies, the Dockerfiles already install FAISS and 
 
 #### 5.6 Improve Intent and Entity Routing
 
-Replace fragile substring routing where needed with:
+Continue improving the Groq classifier and deterministic fallback with:
 
 - Normalized crop synonyms.
 - Negative/basic general query handling.
 - Explicit intent labels.
-- A user clarification response when crop/location/intent is ambiguous.
-- Optional LLM routing with deterministic tool allow-listing, if the team intentionally wants an LLM planner.
+- Clarification responses when crop, location, or intent is ambiguous.
+- Deterministic tool allow-listing; the LLM classifies requests but does not choose tools directly.
 
 Currently supported crops:
 
@@ -461,7 +448,7 @@ Only use HTTP 200 when an actionable advisory is actually returned.
 Add tests for:
 
 - Invalid base64 and unsupported audio format.
-- Bhashini timeout, HTTP error, and malformed response.
+- Sarvam TTS timeout, HTTP error, and malformed response.
 - Cached voice lookup.
 - Live weather timeout.
 - Missing weather cache.

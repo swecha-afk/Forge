@@ -13,12 +13,18 @@ class Settings(BaseSettings):
     SQLITE_DB_PATH: str = "data/mandi_cache.db"
     HARVEST_THRESHOLD_PCT: float = 5.0
 
-    # Bhashini ULCA Speech-to-Text & Translation Settings
-    BHASHINI_USER_ID: str = ""
-    BHASHINI_API_KEY: str = ""
-    BHASHINI_PIPELINE_ID: str = "64392f96daac500b55c543d0"
-    BHASHINI_AUTH_URL: str = "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline"
-    BHASHINI_INFERENCE_URL: str = "https://dhruva-api.bhashini.gov.in/services/inference/pipeline"
+    # Groq speech-to-text and English translation
+    GROQ_API_KEY: str = ""
+    GROQ_STT_MODEL: str = "whisper-large-v3"
+    GROQ_API_TIMEOUT_SECONDS: float = 60.0
+    GROQ_LLM_MODEL: str = "qwen/qwen3.8-27b"
+    GROQ_LLM_TIMEOUT_SECONDS: float = 30.0
+
+    # Sarvam text-to-speech
+    SARVAM_API_KEY: str = ""
+    SARVAM_TTS_MODEL: str = "bulbul:v3"
+    SARVAM_TTS_SPEAKER: str = "shubh"
+    SARVAM_TTS_TIMEOUT_SECONDS: float = 60.0
     VOICE_CACHE_DB_PATH: str = "data/voice_cache.db"
 
     model_config = SettingsConfigDict(

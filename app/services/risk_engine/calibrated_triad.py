@@ -20,7 +20,11 @@ from app.schemas.swarm_schemas import (
     StandardizedRiskOutput,
     WeatherTelemetryInput,
 )
-from app.services.risk_engine.base import BaseDiseasePredictor, register_predictor
+from app.services.risk_engine.base import (
+    BaseDiseasePredictor,
+    register_predictor,
+    xgboost_tree_contributions,
+)
 from app.services.risk_engine.constants import (
     DISEASE_TO_ID,
     FEATURE_ORDER,
@@ -52,7 +56,6 @@ class CalibratedTriadPredictor(BaseDiseasePredictor):
         self.base_lgb: lgb.LGBMClassifier | None = None
         self.base_cat: cb.CatBoostClassifier | None = None
 
-        self.explainer_xgb: shap.TreeExplainer | None = None
         self.explainer_lgb: shap.TreeExplainer | None = None
         self.explainer_cat: shap.TreeExplainer | None = None
 
@@ -76,8 +79,6 @@ class CalibratedTriadPredictor(BaseDiseasePredictor):
             eval_metric="mlogloss",
         )
         self.base_xgb.fit(X, y)
-        self.explainer_xgb = shap.TreeExplainer(self.base_xgb)
-
         self.base_lgb = lgb.LGBMClassifier(
             objective="multiclass",
             num_class=num_classes,
@@ -202,11 +203,12 @@ class CalibratedTriadPredictor(BaseDiseasePredictor):
                 base = float(exp_val)
             return vec, base
 
-        sv_xgb = self.explainer_xgb.shap_values(x_2d)
         sv_lgb = self.explainer_lgb.shap_values(x_2d)
         sv_cat = self.explainer_cat.shap_values(x_2d)
 
-        phi_xgb, b_xgb = _extract_shap(sv_xgb, self.explainer_xgb, k_star)
+        phi_xgb, b_xgb = xgboost_tree_contributions(
+            self.base_xgb, x_2d, k_star
+        )
         phi_lgb, b_lgb = _extract_shap(sv_lgb, self.explainer_lgb, k_star)
         phi_cat, b_cat = _extract_shap(sv_cat, self.explainer_cat, k_star)
 
@@ -280,7 +282,6 @@ class CalibratedTriadPredictor(BaseDiseasePredictor):
         self.classes_ = data.get("classes_")
         self.version = data.get("version", self.version)
 
-        self.explainer_xgb = shap.TreeExplainer(self.base_xgb)
         self.explainer_lgb = shap.TreeExplainer(self.base_lgb)
         self.explainer_cat = shap.TreeExplainer(self.base_cat)
         return self

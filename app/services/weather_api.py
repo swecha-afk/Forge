@@ -157,6 +157,9 @@ class LiveWeatherService:
 
         return WeatherTelemetryInput(
             crop_name=crop_name,
+            data_source=(
+                "SQLITE_FALLBACK_CACHE" if used_cache else "LIVE_OPEN_METEO"
+            ),
             temp_min_c=round(temp_min, 1),
             temp_max_c=round(temp_max, 1),
             humidity_3d_avg=round(hum_3d_avg, 1),

@@ -1,4 +1,4 @@
-"""Pydantic v2 schemas for Bhashini Voice STT, Multilingual Translation, and Swarm Orchestration contracts."""
+"""Pydantic v2 schemas for voice I/O, multilingual translation, and workflow contracts."""
 
 from typing import Any, Literal
 from pydantic import BaseModel, Field
@@ -20,7 +20,7 @@ LANGUAGE_CODE_TO_NAME: dict[str, str] = {
 
 
 class VoiceTranscriptionRequest(BaseModel):
-    """Input payload containing voice audio for Bhashini Speech-to-Text & Translation."""
+    """Input payload containing audio for multilingual speech transcription."""
 
     audio_base64: str = Field(
         ...,
@@ -55,15 +55,18 @@ class VoiceTranscriptionResponse(BaseModel):
     target_language: str = Field(
         default="en", description="Target translated language code"
     )
-    data_source: Literal["BHASHINI_LIVE_API", "RESILIENCE_CACHE_FAILOVER"] = Field(
-        ..., description="Data provenance: Live Bhashini ULCA API or Local Resilience Cache"
+    data_source: Literal["GROQ_LIVE_API", "RESILIENCE_CACHE_FAILOVER"] = Field(
+        ..., description="Data provenance: live Groq API or exact-audio SQLite cache"
     )
-    confidence_score: float = Field(
-        default=0.95, ge=0.0, le=1.0, description="ASR acoustic confidence score"
+    confidence_score: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="ASR confidence when provided by the transcription provider",
     )
     pipeline_task: str = Field(
-        default="asr_and_translation",
-        description="Bhashini pipeline tasks executed",
+        default="groq_whisper_transcription_and_translation",
+        description="Speech recognition and translation tasks executed",
     )
 
 
@@ -72,7 +75,7 @@ class AgentVoiceQueryRequest(BaseModel):
 
     audio_base64: str | None = Field(
         default=None,
-        description="Base64 voice note (if audio input). If provided, Bhashini STT executes first.",
+        description="Base64 voice note (if audio input). If provided, Groq STT executes first.",
     )
     audio_format: str = Field(
         default="wav",
@@ -120,7 +123,11 @@ class AgentVoiceQueryResponse(BaseModel):
     source_language: str
     detected_crop: str
     intent: str = Field(
-        description="Detected intent: 'disease_outbreak', 'harvest_scheduling', 'irrigation_check', 'general'"
+        description="Detected intent: 'disease_outbreak', 'harvest_scheduling', 'irrigation_check', 'crop_insurance', or 'general'"
+    )
+    intent_classification_source: str = Field(
+        default="KEYWORD_FALLBACK",
+        description="Intent source: Groq LLM classification or deterministic fallback",
     )
     district: str
     state: str
@@ -135,11 +142,34 @@ class AgentVoiceQueryResponse(BaseModel):
         description="Active safety locks: Spray Lock, Leaching Gate, Mandi Spoilage Override",
     )
     execution_route: str = Field(
-        description="Subsystem executed: 'UNIFIED_AGRONOMIC_ENGINE' or 'MANDI_HARVEST_ADVISOR'"
+        description="Subsystem executed: agronomic engine, mandi advisor, crop-insurance guidance, or general guidance"
     )
     data_source_voice: str
+    tts_audio_base64: str | None = Field(
+        default=None,
+        description="Base64-encoded TTS audio in the farmer's vernacular language (None if TTS unavailable)",
+    )
+    tts_status: str = Field(
+        default="TEXT_ONLY",
+        description="TTS output status: 'TTS_LIVE', 'TTS_UNAVAILABLE', or 'TEXT_ONLY'",
+    )
+    tts_mime_type: str = Field(
+        default="audio/wav",
+        description="MIME type of the TTS audio output",
+    )
+    tts_error: str | None = Field(
+        default=None,
+        description="Reason audio synthesis was unavailable, if applicable",
+    )
+    farmer_response_source: str = Field(
+        default="TEMPLATE_FALLBACK",
+        description="Farmer response source: Groq grounded generation or local template",
+    )
+    llm_error: str | None = Field(
+        default=None,
+        description="Reason Groq classification or response generation was unavailable",
+    )
     details: dict[str, Any] = Field(
         default_factory=dict,
         description="Raw JSON execution payloads from risk engine, RAG, or Mandi tool",
     )
-

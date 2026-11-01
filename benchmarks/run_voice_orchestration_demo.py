@@ -1,10 +1,10 @@
-"""Standalone Verification & Demonstration Script for Voice STT & LangGraph Architecture Orchestration.
+"""Standalone Groq voice STT and LangGraph workflow demonstration.
 
 Theme 2, Problem 1: Multilingual Agritech & Resource Advisory Assistant
 Tests:
-1. Bhashini Speech-to-Text & English Translation in Hindi, Bengali, Telugu, Marathi.
+1. Groq Speech-to-Text & English Translation from an optional real audio sample.
 2. SQLite resilience cache write-through and retrieval.
-3. Full 5-Node LangGraph Swarm Orchestration:
+3. Full LangGraph Swarm Orchestration through the TTS output:
    - Disease Outbreak routing to GBDT Triad / ICAR RAG
    - Harvest Scheduling routing to Agmarknet Mandi Tool
    - Cross-Node Safety Overrides (Spray-Lock, Hypoxia Gate, Spoilage Override)
@@ -12,7 +12,6 @@ Tests:
 """
 
 import asyncio
-import base64
 import os
 import sys
 
@@ -24,46 +23,48 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from app.schemas.voice_schemas import VoiceTranscriptionRequest
 from app.services.langgraph_agent.workflow import run_agritech_agent_workflow
-from app.services.voice_service.audio_utils import compute_audio_hash
+from app.services.voice_service.audio_utils import compute_audio_hash, encode_audio_file
 from app.services.voice_service.bhashini_stt import BhashiniVoiceService
 
 
 async def run_all_voice_and_orchestration_tests():
     print("=" * 85)
-    print("  FORGE BUILDATHON - BHASHINI VOICE STT & ARCHITECTURE ORCHESTRATION DEMO")
+    print(" FORGE BUILDATHON - GROQ VOICE STT & LANGGRAPH WORKFLOW DEMO")
     print("  Theme 2, Problem 1: Multilingual Agritech & Resource Advisory Assistant")
     print("=" * 85)
 
     voice_svc = BhashiniVoiceService()
+    demo_audio_path = os.getenv("GROQ_STT_DEMO_AUDIO", "").strip()
+    demo_language = os.getenv("GROQ_STT_DEMO_LANGUAGE", "hi").strip()
 
     # --------------------------------------------------------------------------
-    # TEST 1: Bhashini Voice STT & Indic Translation
+    # TEST 1: Groq Voice STT & Indic Translation
     # --------------------------------------------------------------------------
     print("\n" + "-" * 85)
-    print("[TEST 1] BHASHINI SPEECH-TO-TEXT & ENGLISH TRANSLATION LAYER")
+    print("[TEST 1] GROQ SPEECH-TO-TEXT & ENGLISH TRANSLATION LAYER")
     print("-" * 85)
 
-    languages_to_test = [
-        ("hi", "Hindi", b"hindi_audio_sample_bytes_12345"),
-        ("bn", "Bengali", b"bengali_audio_sample_bytes_67890"),
-        ("te", "Telugu", b"telugu_audio_sample_bytes_54321"),
-        ("mr", "Marathi", b"marathi_audio_sample_bytes_98765"),
-    ]
-
-    for lang_code, lang_name, pcm_data in languages_to_test:
-        b64 = base64.b64encode(pcm_data).decode("utf-8")
+    if demo_audio_path:
+        b64, audio_format = encode_audio_file(demo_audio_path)
         req = VoiceTranscriptionRequest(
             audio_base64=b64,
-            source_language=lang_code,
-            audio_format="wav",
+            source_language=demo_language,
+            audio_format=audio_format,
         )
         res = await voice_svc.transcribe_and_translate(req)
-        print(f"[*] {lang_name} ({lang_code}):")
+        print(f"[*] Source language ({demo_language}):")
         print(f"    Vernacular Transcript: {res.vernacular_transcript}")
         print(f"    English Translation:   {res.english_transcript}")
-        print(f"    Source: {res.data_source} | Confidence: {res.confidence_score * 100:.1f}%\n")
+        confidence = (
+            f"{res.confidence_score * 100:.1f}%"
+            if res.confidence_score is not None
+            else "not provided"
+        )
+        print(f"    Source: {res.data_source} | Confidence: {confidence}\n")
         assert res.vernacular_transcript != ""
         assert res.english_transcript != ""
+    else:
+        print("Skipped: set GROQ_STT_DEMO_AUDIO to a real audio file to test live STT.")
 
     # --------------------------------------------------------------------------
     # TEST 2: SQLite Write-Through Resilience Cache
@@ -85,7 +86,7 @@ async def run_all_voice_and_orchestration_tests():
     print("    -> SQLite Resilience Cache Passed with 100% Data Integrity!\n")
 
     # --------------------------------------------------------------------------
-    # TEST 3: Full 5-Node LangGraph Orchestration — Disease Outbreak (Hindi)
+    # TEST 3: Full LangGraph Orchestration — Disease Outbreak (Hindi)
     # --------------------------------------------------------------------------
     print("-" * 85)
     print("[TEST 3] LANGGRAPH ORCHESTRATION: DISEASE OUTBREAK FLOW (HINDI)")
@@ -117,7 +118,7 @@ async def run_all_voice_and_orchestration_tests():
     assert state_out_1["execution_route"] == "UNIFIED_AGRONOMIC_ENGINE"
 
     # --------------------------------------------------------------------------
-    # TEST 4: Full 5-Node LangGraph Orchestration — Mandi Arbitrage (Bengali)
+    # TEST 4: Full LangGraph Orchestration — Mandi Arbitrage (Bengali)
     # --------------------------------------------------------------------------
     print("-" * 85)
     print("[TEST 4] LANGGRAPH ORCHESTRATION: APMC MANDI HARVEST FLOW (BENGALI)")
@@ -154,26 +155,30 @@ async def run_all_voice_and_orchestration_tests():
     print("[TEST 5] VOICE BASE64 AUDIO NOTE END-TO-END SWARM EXECUTION")
     print("-" * 85)
 
-    dummy_mic_recording = b"\x00\x05\x00\x09" * 2000
-    b64_mic = base64.b64encode(dummy_mic_recording).decode("utf-8")
+    if demo_audio_path:
+        b64_mic, audio_format = encode_audio_file(demo_audio_path)
+        state_out_3 = await run_agritech_agent_workflow(
+            audio_base64=b64_mic,
+            audio_format=audio_format,
+            source_language=demo_language,
+            district="Hooghly",
+            state="West Bengal",
+        )
 
-    state_out_3 = await run_agritech_agent_workflow(
-        audio_base64=b64_mic,
-        source_language="hi",
-        district="Hooghly",
-        state="West Bengal",
-    )
+        print(f" -> STT Transcript (Vernacular): {state_out_3['farmer_vernacular_transcript']}")
+        print(f" -> STT Transcript (English):    {state_out_3['english_transcript']}")
+        print(f" -> Voice Data Provenance:       {state_out_3['data_source_voice']}")
+        print(f" -> Final Audio Speech Text:     {state_out_3['final_speech_text']}")
 
-    print(f" -> STT Transcript (Vernacular): {state_out_3['farmer_vernacular_transcript']}")
-    print(f" -> STT Transcript (English):    {state_out_3['english_transcript']}")
-    print(f" -> Voice Data Provenance:       {state_out_3['data_source_voice']}")
-    print(f" -> Final Audio Speech Text:     {state_out_3['final_speech_text']}")
-
-    assert state_out_3["farmer_vernacular_transcript"] != ""
-    assert state_out_3["english_transcript"] != ""
+        assert state_out_3["farmer_vernacular_transcript"] != ""
+        assert state_out_3["english_transcript"] != ""
+    else:
+        print("Skipped: set GROQ_STT_DEMO_AUDIO to run voice end-to-end.")
 
     print("\n" + "=" * 85)
-    print("  ALL 5 VOICE & LANGGRAPH ORCHESTRATION TESTS COMPLETED SUCCESSFULLY (EXIT 0)!")
+    print("  WORKFLOW AND CACHE DEMO COMPLETED.")
+    if not demo_audio_path:
+        print("  Live STT and voice workflow were skipped; set GROQ_STT_DEMO_AUDIO to enable them.")
     print("=" * 85)
 
 
