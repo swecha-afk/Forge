@@ -19,8 +19,8 @@ shap>=0.45.0
 joblib>=1.4.0
 
 # RAG & Vector Search
-# faiss-cpu>=1.8.0       # Install separately: pip install faiss-cpu
-# sentence-transformers>=3.0.0  # Install separately: pip install sentence-transformers
+faiss-cpu>=1.8.0
+sentence-transformers>=3.0.0
 
 # Agentic Orchestration
 langgraph>=1.2.0
@@ -35,4 +35,3 @@ streamlit-mic-recorder>=0.0.8
 # Utilities
 pandas>=2.2.0
 requests>=2.32.0
-
