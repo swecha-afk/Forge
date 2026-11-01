@@ -33,12 +33,12 @@ ENV PYTHONUNBUFFERED=1
 ENV MPLCONFIGDIR=/tmp/.mplcache
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Expose FastAPI port
-EXPOSE 8000
+# Render sets PORT for web services; use 10000 for local Docker runs.
+EXPOSE 10000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f\"http://localhost:{os.getenv('PORT', '10000')}/health\")" || exit 1
 
-# Production server with auto-workers
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"]
+# Keep one worker to limit memory use on small deployment instances.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --log-level info"]
