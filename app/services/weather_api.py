@@ -6,6 +6,7 @@ for offline / network disruption failover.
 """
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from typing import Any
@@ -27,10 +28,22 @@ INDIAN_AGRO_REGIONS: dict[str, tuple[float, float]] = {
 }
 
 
+def is_network_available() -> bool:
+    """Fast non-blocking probe to verify active outbound internet connectivity."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        res = s.connect_ex(("8.8.8.8", 53))
+        s.close()
+        return res == 0
+    except Exception:
+        return False
+
+
 class LiveWeatherService:
     """Fetches real-time hourly meteorological data from Open-Meteo with SQLite failover caching."""
 
-    def __init__(self, db_path: str = DEFAULT_DB_PATH, timeout_sec: float = 8.0):
+    def __init__(self, db_path: str = DEFAULT_DB_PATH, timeout_sec: float = 2.0):
         self.db = SQLiteKnowledgeManager(db_path)
         self.timeout_sec = timeout_sec
 
@@ -48,35 +61,38 @@ class LiveWeatherService:
         raw_data: dict[str, Any] | None = None
         used_cache = False
 
-        # 1. Attempt Live Open-Meteo REST API Call
-        query_params = (
-            f"latitude={latitude:.4f}&longitude={longitude:.4f}"
-            f"&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,"
-            f"soil_moisture_0_to_7cm,soil_moisture_7_to_28cm"
-            f"&past_days=7&forecast_days=2&timezone=Asia%2FKolkata"
-        )
-        url = f"{OPEN_METEO_BASE_URL}?{query_params}"
-
-        try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "ForgeAgritechSwarm/1.0 (IndianAgriAssistance)"},
+        # 1. Attempt Live Open-Meteo REST API Call if network probe passes
+        if is_network_available():
+            query_params = (
+                f"latitude={latitude:.4f}&longitude={longitude:.4f}"
+                f"&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,"
+                f"soil_moisture_0_to_7cm,soil_moisture_7_to_28cm"
+                f"&past_days=7&forecast_days=2&timezone=Asia%2FKolkata"
             )
-            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-                if resp.status == 200:
-                    raw_data = json.loads(resp.read().decode("utf-8"))
-                    # Write-through to SQLite resilience cache
-                    self.db.cache_set(cache_key, raw_data)
-        except Exception as e:
-            # 2. Network Disruption Failover: Query SQLite Resilience Cache
+            url = f"{OPEN_METEO_BASE_URL}?{query_params}"
+
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "ForgeAgritechSwarm/1.0 (IndianAgriAssistance)"},
+                )
+                with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
+                    if resp.status == 200:
+                        raw_data = json.loads(resp.read().decode("utf-8"))
+                        # Write-through to SQLite resilience cache
+                        self.db.cache_set(cache_key, raw_data)
+            except Exception:
+                raw_data = None
+
+        # 2. Network Disruption Failover: Query SQLite Resilience Cache
+        if raw_data is None:
             cached = self.db.cache_get(cache_key)
             if cached:
                 raw_data = cached
                 used_cache = True
             else:
-                # If neither live nor cached data is available, raise with clear context
                 raise RuntimeError(
-                    f"Live weather API failed ({e}) and no cached entry for key '{cache_key}'. "
+                    f"Live weather API unavailable and no cached entry for key '{cache_key}'. "
                     f"Please check internet connection or pre-populate cache."
                 )
 

@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Core Agritech Swarm Backend API
+  # Member 1: ML Triad + RAG + Guardrails | Member 2: LangGraph + Mandi + Docker
+  # ─────────────────────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agritech-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Bhashini Voice STT (Member 1 / Node 1)
+      - BHASHINI_USER_ID=${BHASHINI_USER_ID:-}
+      - BHASHINI_API_KEY=${BHASHINI_API_KEY:-}
+      - BHASHINI_PIPELINE_ID=${BHASHINI_PIPELINE_ID:-64392f96daac500b55c543cd}
+      # Agmarknet Mandi API (Member 2)
+      - DATA_GOV_API_KEY=${DATA_GOV_API_KEY:-579b464db66ec23bdd000001cdd3946e44ce4afd5208dbe48c4876b4}
+      # Database Paths (inside container)
+      - DB_PATH=artifacts/icar_knowledge.db
+      - FAISS_INDEX_PATH=artifacts/icar_faiss.index
+      - MANDI_DB_PATH=data/mandi_cache.db
+      - VOICE_CACHE_DB_PATH=data/voice_cache.db
+      # Logging
+      - LOG_LEVEL=INFO
+    volumes:
+      # Persist SQLite databases and model artifacts across container restarts
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - agritech-net
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Streamlit Dual-Pane Frontend
+  # Member 3: Farmer Voice Interface + Judge Verification Console
+  # ─────────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: agritech-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - agritech-net
+    restart: unless-stopped
+    profiles:
+      - frontend  # Only start with: docker-compose --profile frontend up
+
+networks:
+  agritech-net:
+    driver: bridge
+

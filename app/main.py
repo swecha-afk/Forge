@@ -3,6 +3,7 @@
 Combines:
 - Member 1: Core Intelligence, Predictive ML, TreeSHAP, and Subspace ICAR RAG
 - Member 2: Agmarknet Mandi Price Harvester and Spoilage Scheduler
+- Member 3 / Member 2: Bhashini Voice STT and LangGraph Architecture Orchestration
 """
 
 from contextlib import asynccontextmanager
@@ -11,14 +12,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.advisory_router import router as advisory_router
+from app.routers.voice_agent_router import router as voice_agent_router
 from app.services.mandi_service.db_cache import init_mandi_db
 from app.services.mandi_service.router import router as mandi_router
+from app.services.voice_service.bhashini_stt import BhashiniVoiceService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize SQLite database cache on startup
+    # Initialize SQLite database caches on startup
     init_mandi_db()
+    BhashiniVoiceService()  # Initializes voice resilience cache table
     yield
 
 
@@ -41,6 +45,7 @@ app.add_middleware(
 # Mount Routers
 app.include_router(mandi_router)
 app.include_router(advisory_router)
+app.include_router(voice_agent_router)
 
 
 @app.get("/health", tags=["Health & Diagnostics"])
@@ -52,5 +57,7 @@ async def health_check():
             "risk_engine": "ACTIVE",
             "subspace_rag": "ACTIVE",
             "weather_connector": "ACTIVE",
+            "voice_stt": "ACTIVE",
+            "langgraph_orchestrator": "ACTIVE",
         },
     }

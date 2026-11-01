@@ -1,0 +1,21 @@
+# Agritech Swarm Frontend — Streamlit Docker Image
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y libgomp1 && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir streamlit matplotlib plotly streamlit-mic-recorder requests
+
+COPY app/ ./app/
+COPY artifacts/ ./artifacts/
+COPY data/ ./data/
+
+ENV MPLCONFIGDIR=/tmp/.mplcache
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "app/frontend/ui.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+

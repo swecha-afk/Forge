@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import socket
 from typing import Any
 
 import httpx
@@ -7,7 +9,7 @@ from dotenv import load_dotenv
 
 from app.core.config import settings
 
-# Force reload of .env so Uvicorn workers always pick up your personal key (...732324a3)
+# Force reload of .env so Uvicorn workers always pick up your personal key
 load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,18 @@ BROWSER_HEADERS = {
 }
 
 
+def is_network_available() -> bool:
+    """Fast non-blocking probe to verify active outbound internet connectivity."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        res = s.connect_ex(("8.8.8.8", 53))
+        s.close()
+        return res == 0
+    except Exception:
+        return False
+
+
 def _select_best_record(
     records: list[dict[str, Any]], clean_district: str, clean_state: str
 ) -> dict[str, Any] | None:
@@ -91,6 +105,9 @@ def _select_best_record(
 async def fetch_live_mandi_data(
     commodity: str, state: str, district: str
 ) -> dict[str, Any] | None:
+    if not is_network_available():
+        return None
+
     url = f"https://api.data.gov.in/resource/{settings.DATA_GOV_RESOURCE_ID}"
     api_key = os.getenv("DATA_GOV_API_KEY", settings.DATA_GOV_API_KEY).strip()
 
@@ -98,9 +115,8 @@ async def fetch_live_mandi_data(
     clean_district = district.strip().title()
     clean_commodity = normalize_commodity(commodity)
 
-    # Force IPv4 (0.0.0.0) to bypass campus/ISP IPv6 blackholes
-    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
-    timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+    transport = httpx.AsyncHTTPTransport(retries=0)
+    timeout = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)
 
     # Strictly filter by State + Commodity so out-of-state prices never distort local 7-day averages
     params = {
@@ -118,7 +134,7 @@ async def fetch_live_mandi_data(
             timeout=timeout,
             follow_redirects=True,
         ) as client:
-            resp = await client.get(url, params=params)
+            resp = await asyncio.wait_for(client.get(url, params=params), timeout=2.0)
 
             if resp.status_code == 429:
                 logger.warning(

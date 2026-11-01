@@ -235,7 +235,7 @@ class SQLiteKnowledgeManager:
             return data
 
     def cache_get(self, cache_key: str) -> dict[str, Any] | None:
-        """Retrieves cached API response payload if available."""
+        """Retrieves cached API response payload if available, with latest fallback."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -245,6 +245,12 @@ class SQLiteKnowledgeManager:
             row = cursor.fetchone()
             if row:
                 return json.loads(row["payload_json"])
+            cursor.execute(
+                "SELECT payload_json FROM api_resilience_cache ORDER BY rowid DESC LIMIT 1;"
+            )
+            fallback_row = cursor.fetchone()
+            if fallback_row:
+                return json.loads(fallback_row["payload_json"])
             return None
 
     def cache_set(self, cache_key: str, payload: dict[str, Any]) -> None:

@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     SQLITE_DB_PATH: str = "data/mandi_cache.db"
     HARVEST_THRESHOLD_PCT: float = 5.0
 
+    # Bhashini ULCA Speech-to-Text & Translation Settings
+    BHASHINI_USER_ID: str = ""
+    BHASHINI_API_KEY: str = ""
+    BHASHINI_PIPELINE_ID: str = "64392f96daac500b55c543d0"
+    BHASHINI_AUTH_URL: str = "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline"
+    BHASHINI_INFERENCE_URL: str = "https://dhruva-api.bhashini.gov.in/services/inference/pipeline"
+    VOICE_CACHE_DB_PATH: str = "data/voice_cache.db"
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )

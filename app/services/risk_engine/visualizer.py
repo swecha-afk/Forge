@@ -6,6 +6,9 @@ from TreeSHAP feature attributions, ready for Streamlit st.pyplot() or REST API 
 
 import base64
 import io
+import os
+
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), "artifacts", ".mplcache"))
 
 import matplotlib
 

@@ -8,9 +8,15 @@ dense vector index using BAAI/bge-small-en-v1.5.
 import os
 from typing import Any
 
-import faiss
+try:
+    import faiss
+except ImportError:
+    faiss = None
 import numpy as np
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
 
 from app.services.rag_engine.db_manager import DEFAULT_DB_PATH, SQLiteKnowledgeManager
 

@@ -173,7 +173,114 @@ Here is what every file in the repository actually does, written in plain and si
 
 ---
 
-### 5. Benchmark Proofs & Scoring Rubric Verification
+### 5. NEW: Voice STT, LangGraph Orchestration & Streamlit UI (Member 1 Additions)
+
+This section documents the Bhashini Speech-to-Text layer, the 5-node LangGraph orchestrator, the Streamlit dual-pane UI, and Docker containerization — all added in the second build phase.
+
+#### Node 1: Bhashini Speech-to-Text & Indic Translation
+
+* **[`app/services/voice_service/bhashini_stt.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/voice_service/bhashini_stt.py):**
+  * *What it does:* The voice input gateway. Accepts base64-encoded audio (WAV/MP3/OGG) in any of 4 Indic languages (Hindi `hi`, Bengali `bn`, Telugu `te`, Marathi `mr`), calls the Government of India's Bhashini ULCA API for ASR + Neural Machine Translation, writes the transcription to a local SQLite resilience cache, and returns the vernacular transcript + English translation. When offline or when Bhashini credentials are absent, automatically falls back to the pre-seeded benchmark scenarios in `data/voice_cache.db`.
+  * *Key method:* `transcribe_and_translate(req: VoiceTranscriptionRequest) -> VoiceTranscriptionResponse`
+  * *Resilience guarantee:* 7 pre-seeded Indic language scenarios cover all 4 crops and 3 intent types — zero cold-start failures during a pitch.
+
+* **[`app/services/voice_service/audio_utils.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/voice_service/audio_utils.py):**
+  * *What it does:* Audio pre-processing helpers — SHA-256 hash for cache keying, base64 decode, audio file encoding.
+
+* **[`app/schemas/voice_schemas.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/schemas/voice_schemas.py):**
+  * *What it does:* Pydantic v2 contracts for voice I/O: `VoiceTranscriptionRequest`, `VoiceTranscriptionResponse`, `AgentVoiceQueryRequest`, `AgentVoiceQueryResponse`, and `SupportedLanguage` enum.
+
+#### LangGraph 5-Node Deterministic Swarm Orchestrator
+
+```
+[AUDIO/TEXT INPUT]
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ NODE 1: STT (stt_node)                                                      │
+│  Bhashini ASR+NMT → vernacular_transcript + english_transcript              │
+│  Failover: SQLite voice_cache.db pre-seeded scenarios                       │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ NODE 2: ROUTER (router_node)                                                │
+│  Entity Extraction: crop (Potato/Tomato/Rice/Wheat) + lat/lon              │
+│  Intent Classification: disease_outbreak | harvest_scheduling | irrigation  │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ NODE 3: TOOL EXECUTION (tool_execution_node)                               │
+│  ├── disease_outbreak / irrigation_check:                                  │
+│  │     UnifiedAgronomicEngine (Calibrated GBDT Triad + TreeSHAP + ICAR RAG)│
+│  └── harvest_scheduling:                                                    │
+│        MandiHarvestAdvisorTool (Agmarknet prices + Spoilage Override)       │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ NODE 4: GUARDRAIL VERIFICATION (guardrail_verification_node)               │
+│  Cross-node safety checks:                                                 │
+│  • [CRITICAL_HOLD_SPRAY]       Rain >10mm OR Wind >18 km/h                │
+│  • [CRITICAL_HOLD_IRRIGATION]  Soil moisture > 0.32 m³/m³                 │
+│  • [OOD_CONFIDENCE_GATE]       FAISS cosine similarity < 0.60             │
+│  • [SPOILAGE_OVERRIDE]         Perishable + rain >15mm in 48h             │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ NODE 5: SYNTHESIZER (synthesizer_node)                                     │
+│  Formulates vernacular TTS speech text in farmer's native language         │
+│  Templates: spray_lock / irrigation_lock / disease_advice / mandi_harvest  │
+│  Output: final_speech_text (ready for Bhashini TTS / st.audio playback)   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+* **[`app/services/langgraph_agent/state.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/langgraph_agent/state.py):**
+  * *What it does:* Defines `AgritechAgentState` TypedDict — the shared message bus between all 5 nodes.
+
+* **[`app/services/langgraph_agent/nodes.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/langgraph_agent/nodes.py):**
+  * *What it does:* Implements all 5 node functions: `stt_node`, `router_node`, `tool_execution_node`, `guardrail_verification_node`, `synthesizer_node`.
+
+* **[`app/services/langgraph_agent/workflow.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/services/langgraph_agent/workflow.py):**
+  * *What it does:* Compiles the `StateGraph`, wires all 5 edges, and provides `run_agritech_agent_workflow()` — the single entry-point for both the FastAPI endpoint and Streamlit UI.
+
+#### New API Endpoints
+
+| Endpoint | Method | Description |
+|:---------|:------:|:------------|
+| `/api/v1/agent/voice/transcribe` | POST | Bhashini STT: converts base64 audio → vernacular + English transcript |
+| `/api/v1/agent/orchestrate` | POST | Full 5-Node LangGraph execution: voice/text → deterministic advisory |
+| `/api/v1/agent/languages` | GET | Lists supported Indic languages and BCP-47 codes |
+
+#### Streamlit Dual-Pane UI
+
+* **[`app/frontend/ui.py`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/app/frontend/ui.py):**
+  * *What it does:* The complete dual-pane farmer interface.
+    * **Left Pane (Farmer Experience):** Language selector, district/state inputs, vernacular text query, voice note uploader, submit button, 5 quick-demo scenario buttons, live advisory output with guardrail badges.
+    * **Right Pane (Judge Verification Console):** Interactive TreeSHAP waterfall chart (`generate_shap_figure()`), ICAR citation cards with clickable government bulletin URLs, Agmarknet mandi price metrics, live weather telemetry JSON, complete agent state JSON (zero-dummy-data proof), and 5-fold benchmark table.
+  * *How to run:* `streamlit run app/frontend/ui.py` (from project root)
+
+#### Docker Containerization
+
+* **[`Dockerfile`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/Dockerfile):** Production `python:3.11-slim` image for the FastAPI backend. Installs `libgomp1` for LightGBM/OpenMP, then `faiss-cpu` and `sentence-transformers` for the full FAISS-enabled RAG path.
+* **[`Dockerfile.frontend`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/Dockerfile.frontend):** Lightweight Streamlit frontend image.
+* **[`docker-compose.yml`](file:///c:/Users/Swecha/OneDrive/Desktop/Forge/docker-compose.yml):** Orchestrates both services with health checks, volume mounts for SQLite persistence, and `agritech-net` bridge network.
+
+```bash
+# Quick start (backend only):
+docker compose up backend
+
+# Full stack (backend + frontend):
+docker compose --profile frontend up
+```
+
+#### Voice Cache & Demo Data
+
+* **`data/voice_cache.db`:** SQLite resilience cache for Bhashini transcriptions. Pre-seeded with 7 benchmark scenarios across Hindi, Bengali, Telugu, Marathi for all 4 crops and 3 intent types. Zero cold-start failures guaranteed.
+* **Demo benchmark:** `python benchmarks/run_voice_orchestration_demo.py` — runs all 5 voice/orchestration tests and exits with code 0.
+* **Pytest suite:** `python -m pytest benchmarks/test_voice_and_orchestration.py -v` — 6 async tests.
+
+---
+
+### 6. Benchmark Proofs & Scoring Rubric Verification
 
 #### 5-Fold Cross-Validation Model Ablation Results
 

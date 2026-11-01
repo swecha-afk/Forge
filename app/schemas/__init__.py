@@ -13,8 +13,17 @@ from app.schemas.swarm_schemas import (
     SwarmExecutionResult,
     WeatherTelemetryInput,
 )
+from app.schemas.voice_schemas import (
+    AgentVoiceQueryRequest,
+    AgentVoiceQueryResponse,
+    SupportedLanguage,
+    VoiceTranscriptionRequest,
+    VoiceTranscriptionResponse,
+)
 
 __all__ = [
+    "AgentVoiceQueryRequest",
+    "AgentVoiceQueryResponse",
     "ICARCitation",
     "MandiQueryRequest",
     "MandiScheduleResponse",
@@ -22,6 +31,9 @@ __all__ = [
     "SafetyOverride",
     "ShapFeatureDriver",
     "StandardizedRiskOutput",
+    "SupportedLanguage",
     "SwarmExecutionResult",
+    "VoiceTranscriptionRequest",
+    "VoiceTranscriptionResponse",
     "WeatherTelemetryInput",
 ]
