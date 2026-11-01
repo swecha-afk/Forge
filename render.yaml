@@ -24,12 +24,6 @@ services:
         value: shubh
       - key: SARVAM_TTS_TIMEOUT_SECONDS
         value: 60
-      - key: SARVAM_TTS_MODEL
-        value: bulbul:v3
-      - key: SARVAM_TTS_SPEAKER
-        value: shubh
-      - key: SARVAM_TTS_TIMEOUT_SECONDS
-        value: 60
       - key: DATA_GOV_API_KEY
         sync: false
       - key: LOG_LEVEL
