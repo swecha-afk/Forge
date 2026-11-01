@@ -1,0 +1,58 @@
+services:
+  - type: web
+    name: forge-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    plan: starter
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_STT_MODEL
+        value: whisper-large-v3
+      - key: GROQ_API_TIMEOUT_SECONDS
+        value: 60
+      - key: GROQ_LLM_MODEL
+        value: qwen/qwen3.8-27b
+      - key: GROQ_LLM_TIMEOUT_SECONDS
+        value: 30
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: SARVAM_TTS_MODEL
+        value: bulbul:v3
+      - key: SARVAM_TTS_SPEAKER
+        value: shubh
+      - key: SARVAM_TTS_TIMEOUT_SECONDS
+        value: 60
+      - key: SARVAM_TTS_MODEL
+        value: bulbul:v3
+      - key: SARVAM_TTS_SPEAKER
+        value: shubh
+      - key: SARVAM_TTS_TIMEOUT_SECONDS
+        value: 60
+      - key: DATA_GOV_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+
+  - type: web
+    name: forge-frontend
+    runtime: docker
+    dockerfilePath: ./Dockerfile.frontend
+    healthCheckPath: /
+    plan: starter
+    envVars:
+      - key: BACKEND_URL
+        value: https://forge-backend.onrender.com
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_STT_MODEL
+        value: whisper-large-v3
+      - key: GROQ_API_TIMEOUT_SECONDS
+        value: 60
+      - key: GROQ_LLM_MODEL
+        value: qwen/qwen3.8-27b
+      - key: GROQ_LLM_TIMEOUT_SECONDS
+        value: 30
+      - key: SARVAM_API_KEY
+        sync: false

@@ -28,10 +28,44 @@ matplotlib.use("Agg")  # Non-interactive backend — required for Streamlit
 import streamlit as st
 import streamlit.components.v1 as components
 import matplotlib.pyplot as plt
+import httpx
 
 from app.services.langgraph_agent.workflow import run_agritech_agent_workflow
 from app.services.risk_engine.constants import CROP_TO_ID, FEATURE_ORDER
 from app.services.risk_engine.visualizer import generate_shap_figure
+
+
+BACKEND_URL = os.getenv("BACKEND_URL", "").strip().rstrip("/")
+
+
+async def execute_workflow_request(**kwargs):
+    """Call the FastAPI backend when configured; otherwise run locally."""
+    if BACKEND_URL:
+        payload = {
+            key: value
+            for key, value in kwargs.items()
+            if value is not None
+        }
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{BACKEND_URL}/api/v1/agent/orchestrate",
+                json=payload,
+            )
+            response.raise_for_status()
+            result = response.json()
+
+        details = result.get("details") or {}
+        return {
+            **result,
+            "active_guardrails": result.get("safety_guardrails_active") or [],
+            "engine_result": details.get("agronomic_engine"),
+            "mandi_result": details.get("mandi_advisor"),
+            "weather_telemetry": details.get("weather_telemetry"),
+            "insurance_guidance": details.get("insurance_guidance"),
+            "final_speech_text": result.get("vernacular_response_text"),
+        }
+
+    return await run_agritech_agent_workflow(**kwargs)
 
 hold_to_speak = components.declare_component(
     "forge_hold_to_speak",
@@ -356,7 +390,7 @@ st.markdown("""
         <p class="header-sub">Multilingual crop guidance, weather safety checks and market insights</p>
     </div>
 </div>
-<div class="gov-navstrip">Groq Whisper STT &nbsp;|&nbsp; Sarvam speech output &nbsp;|&nbsp; ICAR-grounded advice</div>
+<div class="gov-navstrip">Voice support &nbsp;|&nbsp; Spoken advisory &nbsp;|&nbsp; ICAR-grounded advice</div>
 """, unsafe_allow_html=True)
 
 # ── Demo Preset Scenarios ─────────────────────────────────────────────────────
@@ -498,8 +532,6 @@ with col_farmer:
                 st.session_state.farmer_query_text = transcript
                 st.session_state.farmer_query_generation += 1
 
-        if isinstance(voice_recording, dict) and voice_recording.get("audio_base64"):
-            st.caption("Voice recording ready. Submit to transcribe it with Groq Whisper.")
     elif input_mode == "Upload audio":
         uploaded_audio = st.file_uploader(
             "Upload .wav / .mp3 / .ogg / .webm voice note",
@@ -569,7 +601,7 @@ with col_farmer:
             with st.spinner("Swarm Intelligence processing..."):
                 try:
                     result = asyncio.run(
-                        run_agritech_agent_workflow(
+                        execute_workflow_request(
                             audio_base64=audio_b64,
                             audio_format=audio_format,
                             text_query=submitted_query if not audio_b64 else None,
@@ -624,7 +656,7 @@ with col_farmer:
             with st.spinner(f"Loading: {scenario_data['desc']}"):
                 try:
                     result = asyncio.run(
-                        run_agritech_agent_workflow(
+                        execute_workflow_request(
                             text_query=scenario_data["query"],
                             source_language=scenario_data["lang"],
                             district=scenario_data["district"],
@@ -646,19 +678,6 @@ with col_farmer:
     if st.session_state.result_state:
         res = st.session_state.result_state
         st.markdown('<p class="sub-title">Farmer Advisory Output</p>', unsafe_allow_html=True)
-        if st.session_state.last_run_query:
-            st.info(f"Recognized query: {st.session_state.last_run_query}")
-        if st.session_state.last_run_completed_at:
-            st.caption(f"Completed: {st.session_state.last_run_completed_at}")
-        if res.get("data_source_voice") in {
-            "GROQ_LIVE_API",
-            "RESILIENCE_CACHE_FAILOVER",
-        }:
-            st.caption(
-                "English interpretation: "
-                f"{res.get('english_transcript') or 'No English translation returned.'}"
-            )
-
         # Guardrail Alerts (prominent display)
         guardrails = res.get("active_guardrails", [])
         for lock in guardrails:
@@ -680,7 +699,6 @@ with col_farmer:
             )
 
         tts_status = res.get("tts_status", "TEXT_ONLY")
-        st.caption(f"Sarvam speech output: `{tts_status}`")
         tts_audio = res.get("tts_audio_base64")
         if tts_audio:
             try:
@@ -689,33 +707,11 @@ with col_farmer:
                     format=res.get("tts_mime_type", "audio/wav"),
                 )
             except (binascii.Error, ValueError) as e:
-                st.error(f"Invalid TTS audio: {e}")
+                st.error("The generated audio could not be played.")
         elif tts_status == "TTS_UNAVAILABLE":
             st.warning(
-                res.get("tts_error")
-                or "Speech audio is unavailable; the text advisory is shown above."
+                "Speech audio is unavailable; the text advisory is shown above."
             )
-
-        # Execution metadata
-        route = res.get("execution_route", "")
-        crop = res.get("detected_crop", "").upper()
-        intent = res.get("intent", "")
-        data_src = res.get("data_source_voice", "TEXT_INPUT")
-        st.caption(
-            f"Route: `{route}` | Crop: `{crop}` | Intent: `{intent}` | STT: `{data_src}`"
-        )
-        st.caption(
-            "Intent classifier: "
-            f"`{res.get('intent_classification_source', 'KEYWORD_FALLBACK')}` · "
-            "Response generator: "
-            f"`{res.get('farmer_response_source', 'TEMPLATE_FALLBACK')}`"
-        )
-        if res.get("llm_error"):
-            st.warning(f"Groq LLM fallback: {res['llm_error']}")
-        st.caption(
-            "Risk estimates use weather and crop features; the typed symptom text is used "
-            "for routing and retrieval, not as a disease-model input."
-        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RIGHT PANE — JUDGE VERIFICATION CONSOLE
@@ -745,7 +741,6 @@ with col_judge:
         - **SHAP Chart and Value Table**: Crop/weather contributions for disease-risk predictions only
         - **ICAR Ground-Truth Citations**: Verified active ingredients, dosages & PHI days with page-level source URLs
         - **Safety Override Badges**: Cross-node deterministic guardrails (Spray-Lock, Soil-Moisture Gate, Spoilage Override)
-        - **Data Provenance**: Live API, local cache, or sample baseline where reported
         - **Reported 5-Fold Benchmark Metrics**: Evaluated on synthetic, rule-generated examples
         """)
     else:
@@ -766,18 +761,6 @@ with col_judge:
         is_disease_intent = res.get("intent") == "disease_outbreak"
         if is_disease_intent and risk and risk.get("shap_top_drivers"):
             st.markdown('<p class="sub-title">SHAP feature contributions</p>', unsafe_allow_html=True)
-            weather_source = (
-                telemetry.get("data_source")
-                or res.get("weather_data_source")
-                or "UNKNOWN"
-            )
-            st.caption(
-                f"Model: `{risk.get('model_version', 'unknown')}` · "
-                f"Weather input: `{weather_source}`. SHAP explains the predicted "
-                "disease class from crop/weather features, not the wording of your "
-                "question. If those feature inputs are unchanged, the SHAP values "
-                "will also be unchanged."
-            )
             try:
                 from app.schemas.swarm_schemas import ShapFeatureDriver
                 drivers_data = risk.get("shap_top_drivers", [])
@@ -929,10 +912,6 @@ with col_judge:
             )
             col_m3.metric("Action", mandi_res.get("action_flag", "—"))
             mandi_source = mandi_res.get("data_source", "UNKNOWN")
-            st.caption(
-                f"Price source: `{mandi_source}` · "
-                f"Arrival date: `{mandi_res.get('arrival_date', 'unknown')}`"
-            )
             if mandi_source == "DEMO_BASELINE":
                 st.error("Displayed mandi prices are sample baseline values, not live market data.")
             elif mandi_source == "SQLITE_FALLBACK_CACHE":
@@ -956,34 +935,22 @@ with col_judge:
 
         # ── SECTION 5: Weather Telemetry JSON ─────────────────────────────────
         if telemetry:
-            with st.expander("Weather telemetry and provenance"):
-                weather_source = (
-                    telemetry.get("data_source")
-                    or res.get("weather_data_source")
-                    or "UNKNOWN"
+            weather_source = (
+                telemetry.get("data_source")
+                or res.get("weather_data_source")
+                or "UNKNOWN"
+            )
+            if weather_source == "SQLITE_FALLBACK_CACHE":
+                st.warning(
+                    "Weather values came from the local cache and may not be current."
                 )
-                st.caption(f"Weather source: `{weather_source}`")
-                if weather_source == "SQLITE_FALLBACK_CACHE":
-                    st.warning(
-                        "Weather values came from the local cache and may not be current."
-                    )
-                st.json(telemetry)
         elif mandi_res:
             weather_source = res.get("weather_data_source", "UNKNOWN")
-            st.caption(f"Weather source for harvest advice: `{weather_source}`")
             if weather_source == "WEATHER_UNAVAILABLE":
                 st.warning(
                     "Weather data could not be fetched; the harvest recommendation "
                     "used no rain forecast."
                 )
-            with st.expander("Mandi API Raw Response"):
-                st.json(mandi_res)
-
-        # ── SECTION 6: Full State Debug JSON ──────────────────────────────────
-        with st.expander("Complete workflow state and provenance"):
-            # Sanitize for display
-            display_res = {k: v for k, v in res.items() if k != "audio_base64"}
-            st.json(display_res)
 
         # ── SECTION 7: Benchmark Proof ─────────────────────────────────────────
         with st.expander("5-Fold Benchmark Results (Model Ablation)"):

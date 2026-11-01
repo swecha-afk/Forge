@@ -20,6 +20,9 @@ env/
 catboost_info/
 .coverage
 htmlcov/
+artifacts/.mplcache/
+*.db-shm
+*.db-wal
 
 # Logs
 *.log

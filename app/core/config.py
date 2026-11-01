@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     DATA_GOV_SECONDARY_RESOURCE_ID: str = "35985678-0d79-46b4-9ed6-6f13308a1d24"
 
     # Pydantic BaseSettings automatically reads DATA_GOV_API_KEY from .env
-    DATA_GOV_API_KEY: str = "579b464db66ec23bdd000001cdd3946e44ce4aad7209ff7b23ac571b"
+    DATA_GOV_API_KEY: str = ""
     API_TIMEOUT_SECONDS: float = 8.0
     SQLITE_DB_PATH: str = "data/mandi_cache.db"
     HARVEST_THRESHOLD_PCT: float = 5.0

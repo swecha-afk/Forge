@@ -309,7 +309,7 @@ def test_uploaded_audio_transcript_is_written_to_query_bar(monkeypatch):
     assert not app.exception
     assert workflow_calls[0]["audio_format"] == "wav"
     assert app.text_area[0].value == transcript
-    assert any(
+    assert not any(
         "English interpretation:" in item.value
         for item in app.caption
     )
