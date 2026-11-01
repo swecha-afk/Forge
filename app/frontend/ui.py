@@ -30,12 +30,14 @@ import streamlit.components.v1 as components
 import matplotlib.pyplot as plt
 import httpx
 
-from app.services.langgraph_agent.workflow import run_agritech_agent_workflow
 from app.services.risk_engine.constants import CROP_TO_ID, FEATURE_ORDER
 from app.services.risk_engine.visualizer import generate_shap_figure
 
 
 BACKEND_URL = os.getenv("BACKEND_URL", "").strip().rstrip("/")
+
+if not BACKEND_URL:
+    from app.services.langgraph_agent.workflow import run_agritech_agent_workflow
 
 
 async def execute_workflow_request(**kwargs):
